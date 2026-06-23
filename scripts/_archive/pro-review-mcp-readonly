@@ -1,0 +1,161 @@
+#!/usr/bin/env python3
+"""filesystem MCP を read-only に絞る薄い stdio プロキシ。
+
+なぜ必要か:
+- ChatGPT の Plus/Pro は、カスタムMCPコネクタの **read-only ツールしか呼べない**。
+  write 形状のツールは silently disabled になり、混在コネクタは挙動が不安定になる
+  （Pro→Thinking の自動退避、レスポンス途中停止、等が出る）。
+- 公式 filesystem MCP は `write_file/edit_file/create_directory/move_file` を含むので
+  そのまま晒すと「write持ちコネクタ」と認識される。
+- そこで「tools/list の応答から readOnlyHint:true 以外を除外」「tools/call で除外済
+  ツールを拒否」する薄いプロキシを噛ませる。MCP 本体は触らないので version pin は維持。
+
+エスケープハッチ:
+- PRO_REVIEW_FULL=1 で素通し（Business/Ent 用途のフルアクセス）。
+
+公開範囲（pro-review-mcp と同じ）:
+- active-project が指す workspace（読）と inbox（"書" は read-only モードでは抑止）。
+- 未指定なら _no-project（空）のみ。
+"""
+import json, os, subprocess, sys, threading
+
+WS_BASE   = os.path.expanduser("~/.pro-review/workspace")
+INBOX_BASE = os.path.expanduser("~/.pro-review/inbox")
+ACTIVE    = os.path.expanduser("~/.pro-review/active-project")
+NO_PROJ   = os.path.expanduser("~/.pro-review/_no-project")
+FS_PKG    = "@modelcontextprotocol/server-filesystem@2026.1.14"  # version pin (supply-chain)
+
+ALLOW_FULL = os.environ.get("PRO_REVIEW_FULL") == "1"
+
+# active-project の解決（pro-review-mcp と同ロジック）
+P = ""
+try:
+    with open(ACTIVE) as f:
+        P = f.read().strip()
+except OSError:
+    pass
+if P:
+    WS = f"{WS_BASE}/{P}"
+    INBOX = f"{INBOX_BASE}/{P}"
+else:
+    WS = NO_PROJ
+    INBOX = NO_PROJ
+os.makedirs(WS, exist_ok=True)
+os.makedirs(INBOX, exist_ok=True)
+
+# 子プロセスとして filesystem MCP を起動。stderr は親に直送（デバッグ容易化）
+child = subprocess.Popen(
+    ["npx", "-y", FS_PKG, WS, INBOX],
+    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=sys.stderr,
+    bufsize=0,
+)
+
+# tools/list の応答で除外したツール名。tools/call の事前拒否に使う。
+filtered_names = set()
+filtered_lock = threading.Lock()
+
+def is_readonly_tool(tool):
+    """ツール定義オブジェクトが read-only か判定。
+    ChatGPT 公式: readOnlyHint:true が無いものは write 扱い。
+    annotations.readOnlyHint が一級配置。
+    """
+    if not isinstance(tool, dict):
+        return False
+    ann = tool.get("annotations")
+    if isinstance(ann, dict) and ann.get("readOnlyHint") is True:
+        return True
+    # 旧形式互換: トップレベルに readOnlyHint がある場合
+    return tool.get("readOnlyHint") is True
+
+def write_to(dest, data):
+    try:
+        dest.write(data)
+        dest.flush()
+    except (BrokenPipeError, ValueError):
+        pass
+
+def filter_response(line_bytes):
+    """tools/list の応答なら write ツールを除外して返す。それ以外は素通し。"""
+    if ALLOW_FULL:
+        return line_bytes
+    try:
+        msg = json.loads(line_bytes)
+    except json.JSONDecodeError:
+        return line_bytes
+    if not isinstance(msg, dict):
+        return line_bytes
+    result = msg.get("result")
+    if not isinstance(result, dict):
+        return line_bytes
+    tools = result.get("tools")
+    if not isinstance(tools, list):
+        return line_bytes
+    kept, removed = [], []
+    for t in tools:
+        if is_readonly_tool(t):
+            kept.append(t)
+        else:
+            name = t.get("name") if isinstance(t, dict) else None
+            if name:
+                removed.append(name)
+    if removed:
+        with filtered_lock:
+            filtered_names.update(removed)
+        sys.stderr.write(f"[pro-review-mcp-readonly] removed write tools: {sorted(removed)}\n")
+        sys.stderr.flush()
+    result["tools"] = kept
+    out = (json.dumps(msg) + "\n").encode()
+    return out
+
+def maybe_intercept_request(line_bytes):
+    """tools/call で除外ツールを呼ぼうとしたらエラーを返す。
+    戻り値: (passthrough_bytes_or_None, response_bytes_or_None)
+       passthrough_bytes が None なら子に送らない（応答だけ返す）
+    """
+    if ALLOW_FULL:
+        return line_bytes, None
+    try:
+        msg = json.loads(line_bytes)
+    except json.JSONDecodeError:
+        return line_bytes, None
+    if not isinstance(msg, dict):
+        return line_bytes, None
+    if msg.get("method") != "tools/call":
+        return line_bytes, None
+    params = msg.get("params") or {}
+    name = params.get("name")
+    with filtered_lock:
+        blocked = name in filtered_names
+    if not blocked:
+        return line_bytes, None
+    err = {
+        "jsonrpc": "2.0",
+        "id": msg.get("id"),
+        "error": {
+            "code": -32601,
+            "message": f"tool '{name}' is disabled in read-only mode (Pro tier). "
+                       f"set PRO_REVIEW_FULL=1 to allow (Business/Ent only).",
+        },
+    }
+    return None, (json.dumps(err) + "\n").encode()
+
+def client_to_child():
+    """ChatGPT → filesystem MCP"""
+    for line in sys.stdin.buffer:
+        passthrough, immediate = maybe_intercept_request(line)
+        if immediate is not None:
+            write_to(sys.stdout.buffer, immediate)
+        if passthrough is not None:
+            write_to(child.stdin, passthrough)
+    try: child.stdin.close()
+    except Exception: pass
+
+def child_to_client():
+    """filesystem MCP → ChatGPT (tools/list を書換)"""
+    for line in child.stdout:
+        write_to(sys.stdout.buffer, filter_response(line))
+
+t1 = threading.Thread(target=client_to_child, daemon=True)
+t2 = threading.Thread(target=child_to_client, daemon=True)
+t1.start(); t2.start()
+sys.exit(child.wait())

@@ -1,0 +1,256 @@
+#!/usr/bin/env python3
+"""ChatGPT Deep Research 互換の MCP サーバ。
+
+なぜこれが必要か:
+- ChatGPT の **GPT-5.5 Pro は Deep Research surface** で、`search` と `fetch` の
+  2ツールしか呼ばない。それ以外の MCP ツール（`read_file` 等）は見えない。
+- filesystem MCP は read_file/list_directory 等しか持たないので、Pro からは
+  「ツールが見つからない」状態になる（Thinking では呼べる）。
+- そこで search/fetch だけを実装した小さな MCP を立て、active-project の
+  workspace を読み取り専用で「検索→取得」させる。
+
+公開範囲:
+- `active-project` が指す workspace のみ（読み取り、再帰）。
+- inbox は晒さない（Pro/Plus は MCP 経由で書けないので意味がない）。
+- workspace 外パス・symlink・hidden は拒否。
+
+実装は stdio JSON-RPC（newline-delimited）。MCP プロトコル: 2025-03-26 互換。
+"""
+import json, os, sys, threading
+
+WS_BASE   = os.path.expanduser("~/.pro-review/workspace")
+ACTIVE    = os.path.expanduser("~/.pro-review/active-project")
+NO_PROJ   = os.path.expanduser("~/.pro-review/_no-project")
+
+# active-project の解決
+P = ""
+try:
+    with open(ACTIVE) as f:
+        P = f.read().strip()
+except OSError:
+    pass
+WS = f"{WS_BASE}/{P}" if P else NO_PROJ
+os.makedirs(WS, exist_ok=True)
+WS_REAL = os.path.realpath(WS)
+
+# 同時に複数 stdin reader が走らないようロック
+write_lock = threading.Lock()
+
+def log(msg):
+    sys.stderr.write(f"[pro-review-mcp-search-fetch] {msg}\n")
+    sys.stderr.flush()
+
+def send(msg):
+    with write_lock:
+        sys.stdout.write(json.dumps(msg) + "\n")
+        sys.stdout.flush()
+
+def walk_workspace():
+    """workspace 配下の通常ファイルだけ yield。hidden / symlink / バイナリは除外。"""
+    for root, dirs, files in os.walk(WS_REAL, followlinks=False):
+        dirs[:] = [d for d in dirs if not d.startswith(".")]
+        for fn in files:
+            if fn.startswith("."):
+                continue
+            full = os.path.join(root, fn)
+            if os.path.islink(full):
+                continue
+            real = os.path.realpath(full)
+            if not (real == WS_REAL or real.startswith(WS_REAL + os.sep)):
+                continue  # workspace 外へ逃げるものは捨てる
+            yield real
+
+def read_text_safe(path, limit=None):
+    """テキストとして安全に読む。バイナリなら None。"""
+    try:
+        with open(path, "rb") as f:
+            data = f.read() if limit is None else f.read(limit)
+    except OSError:
+        return None
+    if b"\x00" in data[:8192]:
+        return None
+    return data.decode("utf-8", errors="replace")
+
+def make_url(rel):
+    # file:// URL（情報用。ChatGPT は fetch でしか取らない）
+    return "file://" + os.path.join(WS_REAL, rel).replace(" ", "%20")
+
+def tool_search(arguments):
+    """input: {"query": str}
+    output: {"results": [{"id","title","text","url"}, ...]}
+
+    挙動:
+    - query 空 or "*" → workspace 直下＋再帰のファイル一覧
+    - 普通の query → ファイル名 or 先頭~16KB の本文に部分一致するもの
+    - 結果は最大 50 件。各 result の text は最大 400 字スニペット。
+    """
+    query = (arguments.get("query") or "").strip().lower()
+    list_all = query in ("", "*")
+    out = []
+    for full in walk_workspace():
+        rel = os.path.relpath(full, WS_REAL)
+        if list_all:
+            sample = read_text_safe(full, limit=2048) or ""
+        else:
+            if query in rel.lower():
+                sample = read_text_safe(full, limit=2048) or ""
+            else:
+                text = read_text_safe(full, limit=16384)
+                if text is None or query not in text.lower():
+                    continue
+                # 一致箇所周辺をスニペットに
+                idx = text.lower().find(query)
+                start = max(0, idx - 80); end = min(len(text), idx + 320)
+                sample = text[start:end]
+        snippet = sample[:400].replace("\r", "")
+        out.append({
+            "id": rel,
+            "title": rel,
+            "text": snippet,
+            "url": make_url(rel),
+        })
+        if len(out) >= 50:
+            break
+    return {"results": out}
+
+def tool_fetch(arguments):
+    """input: {"id": str}  (id は workspace 相対パス)
+    output: {"id","title","text","url","metadata"}
+    """
+    fid = arguments.get("id") or ""
+    if not isinstance(fid, str) or not fid:
+        raise ValueError("id is required (relative path within workspace)")
+    # path traversal 防止: 絶対パスや .. を経由しても workspace 内に正規化されることを確認
+    full = os.path.realpath(os.path.join(WS_REAL, fid))
+    if not (full == WS_REAL or full.startswith(WS_REAL + os.sep)):
+        raise ValueError("id escapes workspace")
+    if os.path.islink(full):
+        raise ValueError("symlinks are not followed")
+    if not os.path.isfile(full):
+        raise FileNotFoundError(fid)
+    text = read_text_safe(full)
+    if text is None:
+        text = "(binary file omitted)"
+    return {
+        "id": fid,
+        "title": fid,
+        "text": text,
+        "url": make_url(fid),
+        "metadata": {"size_bytes": os.path.getsize(full)},
+    }
+
+TOOLS = [
+    {
+        "name": "search",
+        "description": (
+            "Search files in the project workspace. Returns up to 50 matches with "
+            "snippet text. Pass an empty string or '*' to list everything. "
+            "Use the returned `id` (relative path) with the `fetch` tool to get full content."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "search query (filename substring or content substring; empty for list-all)"}
+            },
+            "required": ["query"],
+            "additionalProperties": False,
+        },
+        "annotations": {
+            "title": "Search workspace",
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": False,
+        },
+    },
+    {
+        "name": "fetch",
+        "description": (
+            "Fetch the full text content of one file from the project workspace, by `id` "
+            "(the relative path returned by `search`)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "id": {"type": "string", "description": "relative path within workspace (as returned by search)"}
+            },
+            "required": ["id"],
+            "additionalProperties": False,
+        },
+        "annotations": {
+            "title": "Fetch workspace file",
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": False,
+        },
+    },
+]
+
+def handle_request(msg):
+    """JSON-RPC リクエスト1件を処理して応答 dict を返す（応答無しなら None）。"""
+    if not isinstance(msg, dict):
+        return None
+    method = msg.get("method")
+    rid = msg.get("id")
+    is_notif = "id" not in msg
+
+    def ok(result):
+        return {"jsonrpc": "2.0", "id": rid, "result": result}
+    def err(code, message):
+        return {"jsonrpc": "2.0", "id": rid, "error": {"code": code, "message": message}}
+
+    if method == "initialize":
+        return ok({
+            "protocolVersion": "2025-03-26",
+            "capabilities": {"tools": {"listChanged": False}},
+            "serverInfo": {"name": "pro-review-search-fetch", "version": "0.1.0"},
+        })
+    if method == "notifications/initialized" or method == "notifications/cancelled":
+        return None  # notifications have no response
+    if method == "ping":
+        return ok({})
+    if method == "tools/list":
+        return ok({"tools": TOOLS})
+    if method == "tools/call":
+        params = msg.get("params") or {}
+        name = params.get("name")
+        args = params.get("arguments") or {}
+        try:
+            if name == "search":
+                result = tool_search(args)
+            elif name == "fetch":
+                result = tool_fetch(args)
+            else:
+                return err(-32601, f"unknown tool: {name}")
+            # MCP tools/call の応答は content 配列。structuredContent も併用すると Deep Research が拾いやすい
+            return ok({
+                "content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}],
+                "structuredContent": result,
+                "isError": False,
+            })
+        except (ValueError, FileNotFoundError) as e:
+            return ok({
+                "content": [{"type": "text", "text": f"error: {e}"}],
+                "isError": True,
+            })
+        except Exception as e:
+            return err(-32603, f"internal error: {e}")
+    if is_notif:
+        return None
+    return err(-32601, f"method not found: {method}")
+
+def main():
+    log(f"workspace = {WS_REAL}")
+    for raw in sys.stdin.buffer:
+        try:
+            msg = json.loads(raw)
+        except json.JSONDecodeError as e:
+            log(f"json decode error: {e}")
+            continue
+        resp = handle_request(msg)
+        if resp is not None:
+            send(resp)
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,87 @@
+#!/usr/bin/env python3
+"""inbox フォルダを監視し、レビュー返信ファイルが現れたら終了する watcher。
+
+Claude Code の background 実行(run_in_background)で起動する想定。
+コマンドが終了すると harness が Claude を再呼び出しするので、
+「ChatGPT Pro の回答が保存された瞬間に自動で続きを再開」できる。
+
+stdout 最終行に REPLY: <path>（検知）か TIMEOUT を出す。
+"""
+import argparse, glob, os, stat, sys, time
+
+def main():
+    ap = argparse.ArgumentParser(description="レビュー返信ファイルの到着を待つ")
+    ap.add_argument("inbox", help="監視するフォルダ")
+    ap.add_argument("--since", type=float, default=None,
+                    help="この epoch 以降に更新されたファイルだけ検知(既定: 起動時刻)")
+    ap.add_argument("--pattern", action="append", default=None,
+                    help="検知するglob(複数可)。既定 *.md,*.txt,*.json")
+    ap.add_argument("--timeout", type=float, default=7200.0, help="最大待機秒(既定2h)")
+    ap.add_argument("--interval", type=float, default=3.0, help="ポーリング間隔秒")
+    ap.add_argument("--stable", type=float, default=1.5,
+                    help="サイズが安定したとみなす秒(書き込み途中の取りこぼし防止)")
+    ap.add_argument("--recursive", action="store_true",
+                    help="サブフォルダも再帰監視(既定は直下のみ＝軽量)")
+    args = ap.parse_args()
+
+    inbox = os.path.abspath(args.inbox)
+    os.makedirs(inbox, exist_ok=True)
+    patterns = args.pattern or ["*.md", "*.txt", "*.json"]
+    since = args.since if args.since is not None else time.time()
+    deadline = time.time() + args.timeout
+
+    def candidates():
+        found = []
+        inbox_real = os.path.realpath(inbox)
+        for pat in patterns:
+            gp = os.path.join(inbox, "**", pat) if args.recursive else os.path.join(inbox, pat)
+            for p in glob.glob(gp, recursive=args.recursive):
+                if os.path.islink(p):  # 外部入力が作る symlink は辿らない
+                    continue
+                try:
+                    st = os.stat(p)
+                except OSError:
+                    continue
+                if not stat.S_ISREG(st.st_mode):  # regular file のみ
+                    continue
+                rp = os.path.realpath(p)
+                if not (rp == inbox_real or rp.startswith(inbox_real + os.sep)):
+                    continue  # inbox 配下に正規化されないものは無視
+                if st.st_mtime >= since - 0.01 and st.st_size > 0:
+                    found.append((st.st_mtime, st.st_size, p))
+        return sorted(found)
+
+    sys.stderr.write(f"[watch] {inbox} を監視中 (patterns={patterns}, timeout={args.timeout:.0f}s)\n")
+    sys.stderr.flush()
+
+    while time.time() < deadline:
+        cands = candidates()
+        if cands:
+            _, size1, p = cands[-1]  # 最新の1件
+            # サイズ安定を待つ(書き込み中の途中検知を避ける)
+            time.sleep(args.stable)
+            try:
+                size2 = os.path.getsize(p)
+            except OSError:
+                size2 = -1
+            if size2 == size1 and size2 > 0:
+                # TOCTOU 再確認: 安定待ちの後にも symlink/regular/inbox配下を再検証
+                if os.path.islink(p):
+                    continue
+                try:
+                    st2 = os.lstat(p)
+                except OSError:
+                    continue
+                rp = os.path.realpath(p)
+                ir = os.path.realpath(inbox)
+                if not stat.S_ISREG(st2.st_mode) or not (rp == ir or rp.startswith(ir + os.sep)):
+                    continue
+                print(f"REPLY: {p}")
+                return 0
+        time.sleep(args.interval)
+
+    print("TIMEOUT")
+    return 2
+
+if __name__ == "__main__":
+    sys.exit(main())

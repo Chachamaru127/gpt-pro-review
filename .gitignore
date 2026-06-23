@@ -1,0 +1,19 @@
+# nodriver / browser runtime（skill 内に閉じる、repo を汚さない）
+scripts/.venv/
+__pycache__/
+*.pyc
+
+# ChatGPT セッション profile（cookie 平文 → Git 厳禁）
+chrome-profile/
+*-profile/
+.pro-review/
+
+# secrets / 環境
+.env
+.env.*
+env.sh
+*.key
+
+# 生成物・受信箱（ローカル状態）
+inbox/
+reports/

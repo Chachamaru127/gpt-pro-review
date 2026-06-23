@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+# レビュー1回分のライフサイクル管理:
+#   開始時だけアクセスを開き(=デーモン起動, 対象プロジェクトのみ公開)、
+#   結果を検知したら必ず閉じる(=デーモン停止, active-project解除)。
+# これにより「使っている間だけ・そのプロジェクトだけ」露出する。
+#
+# 使い方: pro-review-run <repo> [project] [--question "観点"] [--timeout 秒]
+# 注意: デーモンは OpenAI へ outbound 接続する。実行はユーザーのシェルで。
+set -euo pipefail
+
+REPO="${1:?usage: pro-review-run <repo> [project] [--question ...]}"; shift
+PROJECT=""
+QUESTION=""
+TIMEOUT="${TIMEOUT:-3600}"
+if [ "${1:-}" ] && [ "${1#--}" = "$1" ]; then PROJECT="$1"; shift; fi
+while [ "${1:-}" ]; do
+  case "$1" in
+    --question) QUESTION="${2:-}"; shift 2;;
+    --timeout)  TIMEOUT="${2:-3600}"; shift 2;;
+    *) shift;;
+  esac
+done
+
+SK="$HOME/.claude/skills/gpt-pro-review/scripts"
+BASE="$HOME/.pro-review"
+
+# 1. snapshot（.git/秘密情報除外。プロジェクト別サブフォルダへ）
+SNAP=$("$SK/pro-review-snapshot" "$REPO" ${PROJECT:+"$PROJECT"})
+echo "$SNAP"
+# 機械読み取り専用行から取得（人間向け表示から parse しない）
+PROJECT=$(printf '%s\n' "$SNAP" | awk '/^project_name:/{print $2; exit}')
+if ! printf '%s' "$PROJECT" | grep -qE '^[A-Za-z0-9._-]+$'; then
+  echo "[error] project名の取得/検証に失敗: '$PROJECT'" >&2; exit 1
+fi
+INBOX="$BASE/inbox/$PROJECT"
+
+# 2. このプロジェクトだけ公開に絞る
+printf '%s\n' "$PROJECT" > "$BASE/active-project"
+
+# 3. アクセスを開く前に、終了時の遮断を必ず仕込む（Ctrl-C/異常終了でも閉じる）
+cleanup() {
+  kill "${DPID:-}" 2>/dev/null || true
+  pkill -f 'tunnel-client run --profile pro-review' 2>/dev/null || true
+  : > "$BASE/active-project"
+  echo "[closed] アクセス遮断: デーモン停止 + active-project 解除" >&2
+}
+trap cleanup EXIT INT TERM
+
+# 既存デーモンがいたら lifecycle 管理のため停止して握り直す
+if pgrep -f 'tunnel-client run --profile pro-review' >/dev/null 2>&1; then
+  echo "[info] 既存デーモンを停止して握り直します" >&2
+  pkill -f 'tunnel-client run --profile pro-review' 2>/dev/null || true
+  sleep 1
+fi
+
+# 4. デーモン起動（このプロジェクトだけ公開された状態で）
+"$SK/pro-review-tunnel" > "$BASE/daemon.log" 2>&1 &
+DPID=$!
+sleep 3
+if ! kill -0 "$DPID" 2>/dev/null; then
+  echo "[error] デーモン起動失敗。$BASE/daemon.log を確認:" >&2
+  tail -5 "$BASE/daemon.log" >&2
+  exit 1
+fi
+echo "[open] アクセス開始: project=$PROJECT のみ公開、デーモン PID=$DPID"
+
+# 5. 貼り付け用の依頼文を生成（connector モード + inbox 書き戻し指示）
+START=$(date +%s)
+mkdir -p "$BASE/outbox"
+REQ="$BASE/outbox/${PROJECT}-request.md"
+cat > "$REQ" <<EOF
+あなたは接続済みの pro-review コネクタで、プロジェクト workspace に read-only でアクセスできます（このレビュー中のみ有効）。コネクタは 2 つのツールを提供します:
+- search(query): workspace 内のファイルを検索。query="" または "*" で全件一覧。
+- fetch(id): search が返した id（workspace 相対パス）を渡して全文を取得。
+
+タスク:
+1) search("") で workspace 全ファイル一覧を取得し、構造を把握する。
+2) 必要なファイルを fetch(id) で読む。
+3) 次の観点でレビュー: ${QUESTION:-正しさ(バグ/論理破綻)・セキュリティ・設計の妥当性・抜けているエッジケース。各指摘は file:line と 重大度(高/中/低)}
+4) 回答は **このチャットへの返信本文として**出力する（コネクタには書き込みツールが無い）。
+5) 最終行に "[[DONE-${START}]]" を必ず記載する（自動検知用）。
+EOF
+echo "================ ChatGPT(GPT-5.5 Pro)に貼る依頼 ================"
+cat "$REQ"
+echo "==============================================================="
+command -v pbcopy >/dev/null 2>&1 && pbcopy < "$REQ" && echo "(↑クリップボードにコピー済み。ChatGPTに貼ってください)"
+
+# 6. 結果を待つ（検知 or timeout で抜ける → trap が必ずアクセス遮断）
+echo "[waiting] $INBOX を監視中… (最大 ${TIMEOUT}s)"
+if WOUT="$("$SK/pro-review-watch" "$INBOX" --since "$START" --timeout "$TIMEOUT" --interval 3)"; then
+  echo "$WOUT"
+  # 返信を reports/ に永続化（後から参照できるように）
+  REPLY=$(printf '%s\n' "$WOUT" | awk '/^REPLY:/{print $2; exit}')
+  if [ -n "$REPLY" ] && [ -f "$REPLY" ]; then
+    REPORTS="$BASE/reports/$PROJECT"; mkdir -p "$REPORTS"
+    TS=$(date +%Y%m%d-%H%M%S); DEST="$REPORTS/$TS-$(basename "$REPLY")"
+    cp "$REPLY" "$DEST" && echo "report_saved: $DEST"
+  fi
+  echo "[done] レビュー受領。アクセスを閉じます。"
+else
+  echo "[timeout] 期限内に結果が来ませんでした。アクセスを閉じます。" >&2
+fi
+# trap cleanup がここで発火（デーモン停止・公開解除）

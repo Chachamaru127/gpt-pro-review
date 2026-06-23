@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# OpenAI Secure MCP Tunnel を pro-review 用に起動するラッパー。
+# 前提: tunnel-client バイナリ(Platform Tunnels からDL) が PATH か ~/.pro-review/bin にある。
+#       環境変数 CONTROL_PLANE_TUNNEL_ID, CONTROL_PLANE_API_KEY が設定済み。
+set -euo pipefail
+
+PROFILE="pro-review"
+MCP_CMD="${PRO_REVIEW_MCP_CMD:-$HOME/.claude/skills/gpt-pro-review/scripts/pro-review-mcp}"
+export PATH="$HOME/.pro-review/bin:$PATH"
+export HEALTH_LISTEN_ADDR="${HEALTH_LISTEN_ADDR:-127.0.0.1:0}"
+export HEALTH_URL_FILE="${HEALTH_URL_FILE:-$HOME/.pro-review/health.url}"
+
+# 認証情報を取り込む。source せず KEY=VALUE だけ parse（env.sh 改ざんでの任意コマンド実行を防ぐ）
+ENVF="$HOME/.pro-review/env.sh"
+if [ -f "$ENVF" ]; then
+  owner=$(stat -f '%u' "$ENVF" 2>/dev/null || stat -c '%u' "$ENVF" 2>/dev/null)
+  [ "$owner" = "$(id -u)" ] || { echo "[error] $ENVF の所有者が不正" >&2; exit 1; }
+  perm=$(stat -f '%Lp' "$ENVF" 2>/dev/null || stat -c '%a' "$ENVF" 2>/dev/null)
+  [ "$perm" = "600" ] || { echo "[warn] $ENVF を 0600 に修正" >&2; chmod 600 "$ENVF"; }
+  while IFS= read -r line; do
+    case "$line" in
+      export\ CONTROL_PLANE_TUNNEL_ID=*|CONTROL_PLANE_TUNNEL_ID=*)
+        v="${line#*=}"; v="${v%\"}"; v="${v#\"}"; export CONTROL_PLANE_TUNNEL_ID="$v" ;;
+      export\ CONTROL_PLANE_API_KEY=*|CONTROL_PLANE_API_KEY=*)
+        v="${line#*=}"; v="${v%\"}"; v="${v#\"}"; export CONTROL_PLANE_API_KEY="$v" ;;
+    esac
+  done < "$ENVF"
+fi
+
+if ! command -v tunnel-client >/dev/null 2>&1; then
+  cat >&2 <<EOF
+[setup] tunnel-client が見つからない。
+  1) https://platform.openai.com/settings/organization/tunnels からバイナリをDL
+  2) ~/.pro-review/bin/tunnel-client に置いて chmod +x
+EOF
+  exit 1
+fi
+: "${CONTROL_PLANE_TUNNEL_ID:?Platform Tunnels で発行した tunnel_id を環境変数にセット}"
+: "${CONTROL_PLANE_API_KEY:?Platform Runtime API keys で発行した key を環境変数にセット}"
+
+# プロファイルが無ければ作る（YAMLの有無で判定。既存なら作り直さない）
+PROFILE_FILE="$HOME/.config/tunnel-client/$PROFILE.yaml"
+if [ ! -f "$PROFILE_FILE" ]; then
+  tunnel-client init --sample sample_mcp_stdio_local --profile "$PROFILE" \
+    --tunnel-id "$CONTROL_PLANE_TUNNEL_ID" \
+    --mcp-command "$MCP_CMD"
+fi
+
+if ! tunnel-client doctor --profile "$PROFILE" --explain; then
+  [ "${FORCE_RUN:-}" = "1" ] || { echo "[error] doctor 失敗。原因を確認するか FORCE_RUN=1 で続行。" >&2; exit 1; }
+fi
+echo "[run] tunnel-client を起動。ChatGPT の Connectors で Tunnel モード + 同じ tunnel_id を登録して使う。"
+exec tunnel-client run --profile "$PROFILE"

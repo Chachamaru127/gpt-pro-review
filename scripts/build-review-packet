@@ -1,0 +1,266 @@
+#!/usr/bin/env python3
+"""外部の強力モデル(例: ChatGPT の GPT-5.5 Pro)に貼って渡す「レビュー依頼パケット」を組み立てる。
+
+3モード:
+  embed         … diff と変更ファイル本文をプロンプトに同梱（トンネル不要・常に動く）
+  connector     … コードは貼らず「接続済みMCPでこのパスを読んで」と指示（Secure MCP Tunnel 利用者向け）
+  github-branch … コードは貼らず ChatGPT の GitHub コネクタを <branch> に向ける指示（Pro 通常チャット向け）
+
+ブラウザ運転 (`--for-browser`) では末尾に `[[DONE-<since>]]` マーカーを注入し、DOM 抽出側が
+生成完了を検知できるようにする。
+
+セキュリティ:
+- embed する各ファイル内容に対して secret scan を実行し、ヒット時は ALLOW_SECRETS=1 で
+  明示的に上書きしない限り exit 1 で停止する（Path A の唯一の防御線）
+- max-bytes default = 80_000（Skeptic 指摘: ChatGPT UI のトークン無音切り捨て対策）
+
+出力は Markdown を1ファイルに書き、可能なら pbcopy でクリップボードへ。
+stdout には RESULT 行のみ。
+"""
+import argparse, os, re, subprocess, sys, shutil, time
+
+def sh(args, cwd=None):
+    return subprocess.run(args, cwd=cwd, capture_output=True, text=True)
+
+def eprint(*a): print(*a, file=sys.stderr, flush=True)
+
+LANG = {".py":"python",".js":"javascript",".ts":"typescript",".tsx":"tsx",".jsx":"jsx",
+        ".go":"go",".rs":"rust",".rb":"ruby",".java":"java",".kt":"kotlin",".c":"c",
+        ".h":"c",".cpp":"cpp",".cc":"cpp",".cs":"csharp",".php":"php",".swift":"swift",
+        ".sh":"bash",".sql":"sql",".html":"html",".css":"css",".json":"json",
+        ".yml":"yaml",".yaml":"yaml",".toml":"toml",".md":"markdown"}
+
+# 高 signal な秘密情報パターン。snapshot 側と同じ正規表現に揃える。
+SECRET_PATTERNS = [
+    re.compile(rb"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
+    re.compile(rb"AKIA[0-9A-Z]{16}"),
+    re.compile(rb"sk-[A-Za-z0-9_-]{20,}"),
+    re.compile(rb"ghp_[A-Za-z0-9]{36}"),
+    re.compile(rb"xox[baprs]-[A-Za-z0-9-]{10,}"),
+]
+
+def lang_of(path):
+    return LANG.get(os.path.splitext(path)[1].lower(), "")
+
+def secret_hits(rel, data):
+    """data に秘密情報パターンがあれば [(rel, pattern_name)] を返す。"""
+    hits = []
+    for pat in SECRET_PATTERNS:
+        if pat.search(data):
+            hits.append((rel, pat.pattern.decode("utf-8", "replace")))
+    return hits
+
+def main():
+    ap = argparse.ArgumentParser(description="外部Proモデル用のレビュー依頼パケットを作る")
+    ap.add_argument("--base", help="このブランチとの差分をレビュー対象に (例 main)")
+    ap.add_argument("--uncommitted", action="store_true",
+                    help="未コミット(staged+unstaged+untracked)を対象。--base 未指定時の既定")
+    ap.add_argument("--files", nargs="*", default=[], help="明示的に対象にするファイル/ディレクトリ")
+    ap.add_argument("--question", default="", help="Proに尋ねたい具体的な観点/質問")
+    ap.add_argument("--mode", choices=["embed", "connector"], default="embed")
+    ap.add_argument("--connector-name", default="(接続済みのリポジトリMCP)",
+                    help="connectorモードでChatGPTに伝えるMCP名")
+    ap.add_argument("--github-branch", default="",
+                    help="ChatGPTのGitHubコネクタにこのブランチを読ませる指示文に切替（コード非埋込）")
+    ap.add_argument("--repo", default=None)
+    ap.add_argument("-o", "--out", default="/tmp/pro-review-packet.md")
+    ap.add_argument("--max-bytes", type=int, default=80_000,
+                    help="同梱本文の上限(embed)。default=80k はChatGPT UIの無音切り捨て対策")
+    ap.add_argument("--no-clip", action="store_true", help="クリップボードへコピーしない")
+    ap.add_argument("--for-browser", action="store_true",
+                    help="末尾に [[DONE-<since>]] マーカーを注入（DOM抽出側の完了検知用）")
+    ap.add_argument("--since", default="",
+                    help="完了マーカーに使う非負整数（未指定なら現在 epoch 秒）")
+    args = ap.parse_args()
+    if args.base and args.uncommitted:
+        eprint("--base と --uncommitted は併用できません"); sys.exit(2)
+    if args.github_branch:
+        # GitHub ブランチ指示モードに切替（コード非埋込）
+        args.mode = "github-branch"
+
+    # --repo の遅延評価: argparse default で os.getcwd() を呼ぶと cwd 消失時に死ぬため
+    if args.repo is None:
+        try:
+            args.repo = os.getcwd()
+        except FileNotFoundError:
+            eprint("--repo が未指定で、かつ現在の cwd が無効です")
+            sys.exit(2)
+
+    repo = os.path.abspath(args.repo)
+    is_git = sh(["git", "rev-parse", "--is-inside-work-tree"], repo).stdout.strip() == "true"
+
+    # 対象の diff とファイル一覧を決める
+    diff = ""
+    changed = []
+    if args.files:
+        # repo 外パス(絶対パス / .. / symlink経由)を弾く。外部モデルへ意図せぬローカルファイルを貼る事故を防ぐ
+        repo_real = os.path.realpath(repo)
+        changed = []
+        for c in args.files:
+            full = os.path.realpath(os.path.join(repo, c))
+            if not (full == repo_real or full.startswith(repo_real + os.sep)):
+                eprint(f"skip(repo外のため除外): {c}"); continue
+            if os.path.isdir(full):  # ディレクトリ指定は再帰展開（各 file の symlink/realpath を再検証）
+                for root, _, files in os.walk(full):
+                    for fn in files:
+                        fp = os.path.join(root, fn)
+                        if os.path.islink(fp):
+                            continue
+                        rfp = os.path.realpath(fp)
+                        if rfp == repo_real or rfp.startswith(repo_real + os.sep):
+                            changed.append(os.path.relpath(rfp, repo))
+            else:
+                changed.append(os.path.relpath(full, repo))
+    elif is_git:
+        if args.base:
+            r = sh(["git", "diff", f"{args.base}...HEAD"], repo)
+            if r.returncode != 0:
+                eprint(f"git diff 失敗: {r.stderr.strip()[:200]}"); sys.exit(1)
+            diff = r.stdout
+            changed = [l for l in sh(["git","diff","--name-only",f"{args.base}...HEAD"],repo).stdout.splitlines() if l]
+        else:
+            # uncommitted 既定: tracked の差分 + untracked
+            diff = sh(["git", "diff", "HEAD"], repo).stdout
+            tracked = [l for l in sh(["git","diff","--name-only","HEAD"],repo).stdout.splitlines() if l]
+            untr = [l for l in sh(["git","ls-files","--others","--exclude-standard"],repo).stdout.splitlines() if l]
+            changed = tracked + untr
+    branch = sh(["git","rev-parse","--abbrev-ref","HEAD"], repo).stdout.strip() if is_git else ""
+
+    q = args.question.strip() or (
+        "正しさ(バグ/論理破綻)、セキュリティ、設計の妥当性、抜けている観点・エッジケースを優先度順に。"
+        "各指摘は file:line を添えて具体的に。重大度(高/中/低)と修正方針も。")
+
+    out = []
+    out.append("# コードレビュー依頼")
+    out.append("")
+    out.append("あなたは経験豊富なシニアエンジニアのレビュアです。以下の変更を独立した視点で厳しくレビューしてください。")
+    out.append("")
+    out.append("## 文脈")
+    out.append(f"- リポジトリ: `{os.path.basename(repo)}`" + (f" / ブランチ: `{branch}`" if branch else ""))
+    if args.base:
+        out.append(f"- 比較対象: `{args.base}...HEAD`")
+    elif not args.files:
+        out.append("- 対象: 未コミットの変更")
+    out.append("")
+    out.append("## レビュー観点")
+    out.append(q)
+    out.append("")
+
+    if args.mode == "github-branch":
+        # GitHub コネクタ指示モード: コードは貼らない
+        out.append("## 対象（ChatGPT の GitHub コネクタで読んでください）")
+        out.append(f"このチャットで有効化されている ChatGPT 公式 **GitHub コネクタ** から、"
+                   f"対象リポジトリのブランチ **`{args.github_branch}`** を読んでください。"
+                   "変更ファイルを順に確認し、必要なら周辺も辿って文脈を把握してからレビューしてください。")
+        out.append("")
+        if changed:
+            out.append("変更ファイル（参考）:")
+            for c in changed:
+                out.append(f"- `{c}`")
+        if diff:
+            out.append("")
+            out.append("変更の差分（要点把握用。実体は GitHub コネクタで読めます）:")
+            out.append("```diff")
+            out.append(diff[:30_000])
+            out.append("```")
+    elif args.mode == "connector":
+        out.append("## 対象（接続済みMCPで読んでください）")
+        out.append(f"接続済みのMCPコネクタ **{args.connector_name}** からリポジトリを直接読めます。"
+                   "次のファイルを読み、必要なら周辺も辿って文脈を把握してからレビューしてください。")
+        out.append("")
+        for c in changed:
+            out.append(f"- `{c}`")
+        if diff:
+            out.append("")
+            out.append("変更の差分（要点把握用。実体はMCPで読めます）:")
+            out.append("```diff")
+            out.append(diff[:30_000])
+            out.append("```")
+    else:
+        if diff:
+            out.append("## 変更差分")
+            out.append("```diff")
+            out.append(diff)
+            out.append("```")
+            out.append("")
+        out.append("## 変更ファイルの全文")
+        budget = args.max_bytes
+        omitted = []
+        secret_violations = []
+        allow_secrets = os.environ.get("ALLOW_SECRETS") == "1"
+        for c in changed:
+            p = os.path.join(repo, c)
+            if not os.path.isfile(p):
+                continue
+            try:
+                data = open(p, "rb").read()
+            except Exception:
+                continue
+            if b"\x00" in data[:8192]:  # binary skip
+                omitted.append(f"{c} (binary)"); continue
+            # secret scan: ALLOW_SECRETS=1 で上書きしない限り、ヒット時は中止
+            hits = secret_hits(c, data)
+            if hits and not allow_secrets:
+                secret_violations.extend(hits)
+                continue  # 後でまとめて報告
+            text = data.decode("utf-8", "replace")
+            tb = len(data)  # byte 基準（指摘対応）
+            if tb > budget:
+                omitted.append(f"{c} ({tb}B, 予算超過)"); continue
+            budget -= tb
+            out.append(f"### `{c}`")
+            out.append(f"```{lang_of(c)}")
+            out.append(text.rstrip("\n"))
+            out.append("```")
+            out.append("")
+        if secret_violations:
+            # 中止: ChatGPT に秘密情報を流す事故の唯一の防御線
+            eprint("✗ 秘密情報の疑いを検出。embed を中止:")
+            for rel, pat in secret_violations:
+                eprint(f"  - {rel} (pattern: {pat[:60]})")
+            eprint("  誤検知なら ALLOW_SECRETS=1 を付けて再実行")
+            sys.exit(1)
+        if omitted:
+            # Skeptic 対策: truncated 旗を本文末尾近くに明示。ChatGPT が「全部見た」と勘違いするのを防ぐ
+            out.append("## ⚠ 同梱省略（要注意 — トークン上限による無音切り捨て対策）")
+            out.append("以下のファイルは max-bytes 上限のため本文を同梱していない。"
+                       "判断時はこの省略を考慮し、必要なら別途要求してください。")
+            for o in omitted:
+                out.append(f"- {o}")
+            out.append("")
+
+    out.append("## 出力形式")
+    out.append("1. 全体評価（このまま進めてよいか/要修正か）")
+    out.append("2. 指摘一覧: [重大度] file:line — 問題 — 推奨修正")
+    out.append("3. 見落としやすい点・追加で確認すべきこと")
+
+    if args.for_browser:
+        since = args.since.strip() or str(int(time.time()))
+        if not since.isdigit():
+            eprint(f"--since must be a non-negative integer, got: {since!r}"); sys.exit(2)
+        out.append("")
+        out.append("## 完了マーカー（必ず最終行に1行で記載）")
+        out.append(f"応答の **最後の1行** に、以下のマーカーをそのまま記載してください。"
+                   f"これは応答完了の自動検知に使われ、引用や説明文の中ではなく、本当に最終行に置く必要があります。")
+        out.append("")
+        out.append(f"`[[DONE-{since}]]`")
+
+    text = "\n".join(out)
+
+    os.makedirs(os.path.dirname(os.path.abspath(args.out)) or ".", exist_ok=True)
+    with open(args.out, "w") as f:
+        f.write(text)
+
+    clipped = False
+    if not args.no_clip and shutil.which("pbcopy"):
+        try:
+            subprocess.run(["pbcopy"], input=text, text=True, check=True)
+            clipped = True
+        except Exception:
+            pass
+
+    eprint(f"packet: {len(text)} bytes / 変更ファイル {len(changed)} / mode={args.mode} / clip={'yes' if clipped else 'no'}")
+    print(f"RESULT: {os.path.abspath(args.out)}" + ("  (クリップボードにコピー済み)" if clipped else ""))
+
+if __name__ == "__main__":
+    main()

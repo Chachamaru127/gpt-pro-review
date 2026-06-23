@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# 全テスト直列実行＋集計。
+# 失敗があれば exit 1。
+set -uo pipefail
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$HOME"  # 安全な cwd
+
+TESTS=(
+  "test-save-reply.sh"
+  "test-browser-embed.sh"
+  "test-search-fetch.sh"
+  "test-start-template.sh"
+  "test-integration-path-a.sh"
+  "test-integration-path-b.sh"
+)
+
+pass=0; fail=0
+failed=()
+for t in "${TESTS[@]}"; do
+  echo
+  echo "================================================================"
+  echo "RUN: $t"
+  echo "================================================================"
+  if bash "$SCRIPT_DIR/$t"; then
+    pass=$((pass + 1))
+  else
+    fail=$((fail + 1))
+    failed+=("$t")
+  fi
+done
+
+echo
+echo "================================================================"
+echo "SUMMARY: pass=$pass fail=$fail / ${#TESTS[@]}"
+if [ "$fail" -gt 0 ]; then
+  echo "Failed:"
+  for f in "${failed[@]}"; do echo "  - $f"; done
+  echo "================================================================"
+  exit 1
+fi
+echo "All tests passed."
+echo "================================================================"

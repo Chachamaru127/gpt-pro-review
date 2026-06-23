@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# レビュー対象リポジトリの「クリーンなスナップショット」を ~/.pro-review/workspace に作る。
+# ライブのリポジトリを ChatGPT に晒さないための隔離コピー。.git や秘密情報は除外。
+set -euo pipefail
+
+REPO="${1:-$PWD}"
+REPO="$(cd "$REPO" && pwd)"
+PROJECT="${2:-$(basename "$REPO")}"   # 任意のプロジェクト名。既定=フォルダ名
+# project名検証: 英数 . _ - のみ。path区切り/.. を拒否（path injection / 誤削除 防止）
+if ! printf '%s' "$PROJECT" | grep -qE '^[A-Za-z0-9._-]+$' || [ "$PROJECT" = "." ] || [ "$PROJECT" = ".." ]; then
+  echo "✗ project名が不正: '$PROJECT'（使えるのは英数 . _ - のみ）" >&2; exit 1
+fi
+WS="$HOME/.pro-review/workspace/$PROJECT"
+INBOX="$HOME/.pro-review/inbox/$PROJECT"
+META="$HOME/.pro-review/metadata"            # MCP公開範囲の外（source path を外部へ晒さない）
+MARKER="$META/$PROJECT.source"
+mkdir -p "$META"
+
+# 同名・別パスの取り違え防止（marker は公開範囲外に保存）
+if [ -f "$MARKER" ] && [ "$(cat "$MARKER")" != "$REPO" ]; then
+  echo "✗ project '$PROJECT' は別リポジトリ($(cat "$MARKER"))で使用中。" >&2
+  echo "  別名で: pro-review-snapshot \"$REPO\" <project-name>" >&2
+  exit 1
+fi
+
+mkdir -p "$WS" "$INBOX"
+# 再snapshot時、前回 read-only にしたファイルを更新できるよう一旦書込可に
+chmod -R u+w "$WS" 2>/dev/null || true
+
+rsync -a --delete --safe-links \
+  --exclude '.git/' --exclude '.pro-review-source' \
+  --exclude 'node_modules/' \
+  --exclude '.venv/' --exclude 'venv/' --exclude '__pycache__/' \
+  --exclude 'dist/' --exclude 'build/' --exclude '.next/' --exclude 'target/' \
+  --exclude '.env' --exclude '.env.*' \
+  --exclude '*.key' --exclude '*.pem' --exclude '*.p12' --exclude '*.pfx' --exclude '*.keystore' \
+  --exclude 'id_rsa*' --exclude '*.ppk' --exclude '*.ovpn' \
+  --exclude 'credentials.json' --exclude 'service-account*.json' --exclude '*-adminsdk*.json' \
+  --exclude '.npmrc' --exclude '.pypirc' --exclude '.netrc' \
+  --exclude 'secrets/' --exclude '.ssh/' --exclude '.aws/' --exclude '.gcloud/' --exclude '.kube/' \
+  "$REPO"/ "$WS"/
+
+rm -f "$WS/.pro-review-source" 2>/dev/null || true  # 旧版が workspace 内に置いた marker を除去
+
+# secret scan（高signalパターン。検出時は公開中止。誤検知は ALLOW_SECRETS=1 で上書き）
+HITS=$(grep -rIlE '(-----BEGIN [A-Z ]*PRIVATE KEY-----|AKIA[0-9A-Z]{16}|sk-[A-Za-z0-9_-]{20,}|ghp_[A-Za-z0-9]{36}|xox[baprs]-[A-Za-z0-9-]{10,})' "$WS" 2>/dev/null || true)
+if [ -n "$HITS" ] && [ "${ALLOW_SECRETS:-}" != "1" ]; then
+  echo "✗ 秘密情報の疑いを検出。公開を中止:" >&2
+  printf '%s\n' "$HITS" | sed "s|$WS/|  - |" >&2
+  echo "  誤検知なら ALLOW_SECRETS=1 を付けて再実行" >&2
+  chmod -R u+w "$WS" 2>/dev/null || true
+  exit 1
+fi
+
+chmod -R a-w "$WS"                                   # workspace を on-disk で read-only に（外部の書込を OS が拒否）
+printf '%s\n' "$PROJECT" > "$HOME/.pro-review/active-project"  # このプロジェクトを公開対象に設定
+echo "$REPO" > "$MARKER"
+echo "project_name: $PROJECT"  # 機械読み取り専用（pro-review-run が parse する。説明を足さないこと）
+echo "project: $PROJECT  (公開対象に設定。daemon 再起動で反映)"
+echo "snapshot(read-only): $WS"
+echo "inbox(書く): $INBOX"
+echo "files: $(find "$WS" -type f | wc -l | tr -d ' ')  / .git・秘密情報除外＋secret scan 済"
+echo "watcher例: pro-review-watch \"$INBOX\" --since \$(date +%s)"

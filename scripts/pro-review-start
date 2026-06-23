@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+# ブラウザ送信フロー用の「開始」: 露出を開いて依頼文を用意するところまで（ブロックしない）。
+# ここでブロックしないのは、この後にエージェントがブラウザ送信を挟むため。
+#
+# この後の流れ（エージェントが実行）:
+#   1) この出力の request を ChatGPT(GPT-5.5 Pro)に貼って送る（claude-in-chrome or 手貼り）
+#   2) pro-review-tunnel を background 起動（デーモン＝コネクタ接続先。active-project だけ公開）
+#   3) pro-review-watch <inbox> --since <since> を background 起動（返信検知→自動再開）
+#   4) 返信が来たら pro-review-finish <project> [reply] で reports 永続化＋露出を閉じる
+#
+# 使い方: pro-review-start <repo> [project] [--mode review|research|implement] [--question "..."]
+set -euo pipefail
+
+REPO="${1:?usage: pro-review-start <repo> [project] [--mode review|research|implement] [--question ...]}"; shift
+PROJECT=""
+MODE="review"
+QUESTION=""
+# 先頭が -- でなければ project 名
+if [ "${1:-}" ] && [ "${1#--}" = "$1" ]; then PROJECT="$1"; shift; fi
+while [ "${1:-}" ]; do
+  case "$1" in
+    --mode)     MODE="${2:-review}"; shift 2;;
+    --question) QUESTION="${2:-}"; shift 2;;
+    *) shift;;
+  esac
+done
+case "$MODE" in review|research|implement) ;; *) echo "[error] --mode は review|research|implement のいずれか" >&2; exit 2;; esac
+
+SK="$HOME/.claude/skills/gpt-pro-review/scripts"
+BASE="$HOME/.pro-review"
+
+# 1. snapshot（scoped / secret-scan / read-only）。machine-readable 行から project を取得
+SNAP=$("$SK/pro-review-snapshot" "$REPO" ${PROJECT:+"$PROJECT"})
+PROJECT=$(printf '%s\n' "$SNAP" | awk '/^project_name:/{print $2; exit}')
+if ! printf '%s' "$PROJECT" | grep -qE '^[A-Za-z0-9._-]+$'; then
+  echo "[error] project名の取得/検証に失敗: '$PROJECT'" >&2; exit 1
+fi
+INBOX="$BASE/inbox/$PROJECT"
+
+# 2. 露出をこのプロジェクトだけに絞る（snapshot も設定するが明示的に上書き）
+printf '%s\n' "$PROJECT" > "$BASE/active-project"
+
+# 3. モード別の依頼文を生成（connector モード: フォルダ直読み＋inbox 書き戻し）
+START=$(date +%s)
+mkdir -p "$BASE/outbox"
+REQ="$BASE/outbox/${PROJECT}-${MODE}-${START}.md"
+REPLY_REL="inbox/$PROJECT/REPLY-${START}.md"
+case "$MODE" in
+  review)
+    TASK="次の観点でコードレビュー: ${QUESTION:-正しさ(バグ/論理破綻)・セキュリティ・設計の妥当性・抜けているエッジケース。各指摘は file:line と 重大度(高/中/低) と 推奨修正}"
+    ;;
+  research)
+    TASK="次を調査し、根拠とともに結論をまとめる: ${QUESTION:-（質問未指定。workspace の内容から重要点を整理）}"
+    ;;
+  implement)
+    TASK="次の実装を行い、適用可能な unified diff（git apply できる形式）で提示する。各ファイル全文ではなく差分で。設計判断の理由も短く添える: ${QUESTION:-（実装内容未指定）}"
+    ;;
+esac
+cat > "$REQ" <<EOF
+あなたは接続済みの pro-review コネクタで、プロジェクト workspace に read-only でアクセスできます（この依頼中のみ有効）。コネクタは 2 つのツールを提供します:
+- search(query): workspace 内のファイルを検索。query="" または "*" で全件一覧。
+- fetch(id): search が返した id（workspace 相対パス）を渡して全文を取得。
+
+タスク:
+1) まず search("") で workspace 全ファイルの一覧を取り、構造を把握する。
+2) 必要なファイルを fetch(id) で順に取得して読む。
+3) $TASK
+4) 回答は **このチャットへの返信本文として**出力する（コネクタには書き込みツールが無いため）。
+5) 回答の **最終行に完了マーカー "[[DONE-${START}]]" を必ず1行で記載**する（応答完了の自動検知に使う）。
+
+応答スタイル: 結論先出し、根拠と該当箇所(file:line)を添える、冗長な前置きは避ける。
+EOF
+
+CLIP="no"
+if command -v pbcopy >/dev/null 2>&1; then pbcopy < "$REQ" && CLIP="yes"; fi
+
+# 機械可読（後続スクリプト/エージェントが parse する。説明を足さないこと）
+echo "project_name: $PROJECT"
+echo "mode: $MODE"
+echo "inbox: $INBOX"
+echo "since: $START"
+echo "request_file: $REQ"
+echo "clip: $CLIP"
+echo "---- ChatGPT(GPT-5.5 Pro)に貼る依頼 ----"
+cat "$REQ"
+echo "----------------------------------------"

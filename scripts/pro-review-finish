@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# 返信を reports/ に永続化し、露出を必ず閉じる（デーモン停止 + active-project 解除）。
+# 「使っている間だけ・そのプロジェクトだけ」露出する設計の締め。
+#
+# 使い方: pro-review-finish <project> [reply-path]
+#   reply-path 省略時は inbox/<project> の最新返信(.md/.txt)を採用。
+set -euo pipefail
+
+PROJECT="${1:?usage: pro-review-finish <project> [reply-path]}"
+REPLY="${2:-}"
+if ! printf '%s' "$PROJECT" | grep -qE '^[A-Za-z0-9._-]+$'; then
+  echo "[error] project名が不正: '$PROJECT'" >&2; exit 1
+fi
+BASE="$HOME/.pro-review"
+INBOX="$BASE/inbox/$PROJECT"
+REPORTS="$BASE/reports/$PROJECT"
+mkdir -p "$REPORTS"
+
+# 露出を閉じる（成功/失敗どちらでも必ず実行）
+close_access() {
+  pkill -f 'tunnel-client run --profile pro-review' 2>/dev/null || true
+  : > "$BASE/active-project"
+  echo "[closed] アクセス遮断: デーモン停止 + active-project 解除" >&2
+}
+
+# reply 未指定なら inbox の最新 .md/.txt を採用（symlink は辿らない）
+if [ -z "$REPLY" ]; then
+  REPLY=$(find "$INBOX" -maxdepth 1 -type f \( -name '*.md' -o -name '*.txt' \) -print0 2>/dev/null \
+            | xargs -0 ls -t 2>/dev/null | head -1 || true)
+fi
+
+if [ -n "$REPLY" ] && [ -f "$REPLY" ] && [ ! -L "$REPLY" ]; then
+  # inbox 配下に正規化されることを確認（外部入力の取り違え防止）
+  RR=$(cd "$(dirname "$REPLY")" && pwd -P)/$(basename "$REPLY")
+  IR=$(cd "$INBOX" && pwd -P)
+  if [ "${RR#"$IR"/}" = "$RR" ]; then
+    echo "[error] reply が inbox 配下でない: $REPLY" >&2; close_access; exit 4
+  fi
+  TS=$(date +%Y%m%d-%H%M%S)
+  DEST="$REPORTS/$TS-$(basename "$REPLY")"
+  cp "$REPLY" "$DEST"
+  close_access
+  echo "report_saved: $DEST"
+else
+  close_access
+  echo "[warn] 返信ファイルが見つからない（inbox 空 or パス不正）。露出だけ閉じた。" >&2
+  exit 3
+fi

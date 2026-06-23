@@ -1,0 +1,98 @@
+#!/usr/bin/env python3
+"""ブラウザ DOM 抽出 or 手貼り経由で得た ChatGPT 返信を inbox にアトミックに保存する。
+
+使い方:
+  echo "<reply text>" | pro-review-save-reply <project> <since>
+  pro-review-save-reply <project> <since> --text "<reply text>"
+
+出力:
+  saved: <inbox/<project>/REPLY-<since>.md の絶対パス>
+
+設計（合議で確定）:
+- アトミック書き込み: tmp ファイルに書いて os.rename で確定（同一 FS なら原子的）
+- project 名検証: `^[A-Za-z0-9._-]+$`（snapshot/finish と同正規表現）
+- since 検証: 非負整数のみ（秒精度 epoch でも ms epoch でも通る）
+- 出力先強制: realpath で inbox/<project> 配下に正規化されることを確認
+- symlink 拒否: 既存の出力先が symlink なら拒否（誤書込み防止）
+- stdin と --text は排他
+- サイズ上限なし・UTF-8 強制なし（バイナリ透過保存。ChatGPT 出力にコードフェンス内の生バイトが混ざりうるため）
+"""
+import argparse, os, re, stat, sys, tempfile
+
+PROJECT_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+SINCE_RE   = re.compile(r"^[0-9]+$")
+
+def die(msg, code=2):
+    sys.stderr.write(f"[pro-review-save-reply] error: {msg}\n")
+    sys.exit(code)
+
+def main():
+    ap = argparse.ArgumentParser(description="Save a ChatGPT reply atomically to the project's inbox.")
+    ap.add_argument("project", help="project name (alnum + . _ -)")
+    ap.add_argument("since", help="non-negative integer (epoch s or ms)")
+    ap.add_argument("--text", help="reply content (mutually exclusive with stdin)")
+    args = ap.parse_args()
+
+    project = args.project
+    since   = args.since
+
+    if not PROJECT_RE.match(project) or project in (".", ".."):
+        die(f"invalid project name: {project!r} (must match {PROJECT_RE.pattern})")
+    if not SINCE_RE.match(since):
+        die(f"invalid since: {since!r} (must be a non-negative integer)")
+
+    # 入力ソース: stdin と --text を排他
+    # stdin が pipe か通常ファイルにリダイレクトされている時だけ「データあり」と判定。
+    # 親 tty 継承や /dev/null 継承では誤検知しない（S_ISFIFO/S_ISREG で厳密判定）。
+    try:
+        st_mode = os.fstat(0).st_mode
+        stdin_has_data = stat.S_ISFIFO(st_mode) or stat.S_ISREG(st_mode)
+    except OSError:
+        stdin_has_data = False
+    if args.text is not None and stdin_has_data:
+        die("stdin and --text are mutually exclusive")
+
+    if args.text is not None:
+        payload = args.text.encode("utf-8", errors="replace")
+    elif stdin_has_data:
+        payload = sys.stdin.buffer.read()
+    else:
+        die("no input: pipe stdin or pass --text")
+
+    if not payload:
+        die("input is empty")
+
+    base = os.path.expanduser("~/.pro-review")
+    inbox = os.path.join(base, "inbox", project)
+    os.makedirs(inbox, exist_ok=True)
+
+    # 出力先強制: realpath で inbox 配下を出ない
+    inbox_real = os.path.realpath(inbox)
+    dest = os.path.join(inbox_real, f"REPLY-{since}.md")
+    dest_real_dir = os.path.realpath(os.path.dirname(dest))
+    if not (dest_real_dir == inbox_real or dest_real_dir.startswith(inbox_real + os.sep)):
+        die(f"destination escapes inbox: {dest}")
+
+    # 既存の出力先 symlink は拒否
+    if os.path.islink(dest):
+        die(f"refuse to overwrite symlink: {dest}")
+
+    # アトミック書き込み: tmp ファイル on same dir → os.rename
+    tmp_fd, tmp_path = tempfile.mkstemp(prefix=".tmp.REPLY-", suffix=".md", dir=inbox_real)
+    try:
+        with os.fdopen(tmp_fd, "wb") as f:
+            f.write(payload)
+            f.flush()
+            os.fsync(f.fileno())
+        # rename はファイルレベルでアトミック（同一 FS）
+        os.rename(tmp_path, dest)
+    except Exception as e:
+        # クリーンアップしてから落とす
+        try: os.unlink(tmp_path)
+        except OSError: pass
+        die(f"write failed: {e}", code=1)
+
+    print(f"saved: {dest}")
+
+if __name__ == "__main__":
+    main()
