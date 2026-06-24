@@ -6,6 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$HOME"  # 安全な cwd
 
 TESTS=(
+  "test-syntax-check.sh"
   "test-save-reply.sh"
   "test-browser-embed.sh"
   "test-search-fetch.sh"
