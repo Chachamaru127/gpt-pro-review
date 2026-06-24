@@ -17,3 +17,4 @@ env.sh
 # 生成物・受信箱（ローカル状態）
 inbox/
 reports/
+.harness-mem/
