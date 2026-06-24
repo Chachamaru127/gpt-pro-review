@@ -18,3 +18,6 @@ env.sh
 inbox/
 reports/
 .harness-mem/
+
+# ローカル orchestration / session 状態
+.claude/
