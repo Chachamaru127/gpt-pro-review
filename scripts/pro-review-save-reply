@@ -2,16 +2,19 @@
 """ブラウザ DOM 抽出 or 手貼り経由で得た ChatGPT 返信を inbox にアトミックに保存する。
 
 使い方:
-  echo "<reply text>" | pro-review-save-reply <project> <since>
-  pro-review-save-reply <project> <since> --text "<reply text>"
+  echo "<reply text>" | pro-review-save-reply <project> <run_id>
+  pro-review-save-reply <project> <run_id> --text "<reply text>"
+
+  run_id は path-safe [A-Za-z0-9._-]+（例: 1700000000123-a1b2c3）。
+  後方互換: 非負整数のみの旧 since 値も引き続き受理する。
 
 出力:
-  saved: <inbox/<project>/REPLY-<since>.md の絶対パス>
+  saved: <inbox/<project>/REPLY-<run_id>.md の絶対パス>
 
 設計（合議で確定）:
 - アトミック書き込み: tmp ファイルに書いて os.rename で確定（同一 FS なら原子的）
 - project 名検証: `^[A-Za-z0-9._-]+$`（snapshot/finish と同正規表現）
-- since 検証: 非負整数のみ（秒精度 epoch でも ms epoch でも通る）
+- run_id 検証: path-safe `[A-Za-z0-9._-]+`、`.`/`..` 拒否（数値のみも可）
 - 出力先強制: realpath で inbox/<project> 配下に正規化されることを確認
 - symlink 拒否: 既存の出力先が symlink なら拒否（誤書込み防止）
 - stdin と --text は排他
@@ -20,7 +23,7 @@
 import argparse, os, re, stat, sys, tempfile
 
 PROJECT_RE = re.compile(r"^[A-Za-z0-9._-]+$")
-SINCE_RE   = re.compile(r"^[0-9]+$")
+RUN_ID_RE  = re.compile(r"^[A-Za-z0-9._-]+$")
 
 def die(msg, code=2):
     sys.stderr.write(f"[pro-review-save-reply] error: {msg}\n")
@@ -29,17 +32,19 @@ def die(msg, code=2):
 def main():
     ap = argparse.ArgumentParser(description="Save a ChatGPT reply atomically to the project's inbox.")
     ap.add_argument("project", help="project name (alnum + . _ -)")
-    ap.add_argument("since", help="non-negative integer (epoch s or ms)")
+    ap.add_argument("run_id", help="path-safe run id (e.g. epoch_ms-hex) or legacy numeric since")
     ap.add_argument("--text", help="reply content (mutually exclusive with stdin)")
     args = ap.parse_args()
 
     project = args.project
-    since   = args.since
+    run_id  = args.run_id
 
     if not PROJECT_RE.match(project) or project in (".", ".."):
         die(f"invalid project name: {project!r} (must match {PROJECT_RE.pattern})")
-    if not SINCE_RE.match(since):
-        die(f"invalid since: {since!r} (must be a non-negative integer)")
+    if not RUN_ID_RE.match(run_id) or run_id in (".", ".."):
+        die(f"invalid run_id: {run_id!r} (must be path-safe {RUN_ID_RE.pattern}, not . or ..)")
+    if run_id.startswith(("-", ".")):
+        die(f"invalid run_id: {run_id!r} (must not start with '-' or '.')")
 
     # 入力ソース: stdin と --text を排他
     # stdin が pipe か通常ファイルにリダイレクトされている時だけ「データあり」と判定。
@@ -68,7 +73,7 @@ def main():
 
     # 出力先強制: realpath で inbox 配下を出ない
     inbox_real = os.path.realpath(inbox)
-    dest = os.path.join(inbox_real, f"REPLY-{since}.md")
+    dest = os.path.join(inbox_real, f"REPLY-{run_id}.md")
     dest_real_dir = os.path.realpath(os.path.dirname(dest))
     if not (dest_real_dir == inbox_real or dest_real_dir.startswith(inbox_real + os.sep)):
         die(f"destination escapes inbox: {dest}")

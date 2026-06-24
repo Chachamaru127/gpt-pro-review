@@ -27,6 +27,7 @@ RC=$?
 assert_exit_ok "$RC" "T1 exit 0"
 
 SINCE=$(printf '%s\n' "$OUT" | awk '/^since:/{print $2; exit}')
+RUN_ID=$(printf '%s\n' "$OUT" | awk '/^run_id:/{print $2; exit}')
 REQ=$(printf '%s\n'   "$OUT" | awk '/^request_file:/{print $2; exit}')
 INBOX_LINE=$(printf '%s\n' "$OUT" | awk '/^inbox:/{print $2; exit}')
 PNAME=$(printf '%s\n'   "$OUT" | awk '/^project_name:/{print $2; exit}')
@@ -35,10 +36,15 @@ assert_eq "$PROJECT" "$PNAME" "T1 project_name echo"
 [ -n "$SINCE" ] || _fail "T1 since empty"
 case "$SINCE" in ''|*[!0-9]*) _fail "T1 since must be integer: $SINCE";; esac
 _ok "T1 since=$SINCE (integer)"
+[ -n "$RUN_ID" ] || _fail "T1 run_id empty"
+echo "$RUN_ID" | grep -qE '^[0-9]+-[0-9a-f]{6}$' || _fail "T1 run_id format: $RUN_ID"
+_ok "T1 run_id=$RUN_ID"
 assert_file_exists "$REQ" "T1 request_file"
+assert_contains "$REQ" "$RUN_ID" "T1 request_file contains run_id"
 
 CONTENT=$(cat "$REQ")
-assert_contains "$CONTENT" "[[DONE-$SINCE]]" "T1 DONE marker injected"
+assert_contains "$CONTENT" "[[DONE-$RUN_ID]]" "T1 DONE marker uses run_id"
+assert_not_contains "$CONTENT" "[[DONE-$SINCE]]" "T1 DONE not seconds-only"
 assert_contains "$CONTENT" "BUGGY_TOKEN"      "T1 changed file content embedded"
 assert_contains "$CONTENT" "find bugs"        "T1 question included"
 
@@ -50,13 +56,13 @@ PROJECT="brem-t2-$$"
 OUT=$("$CMD" "$REPO" "$PROJECT" --github-branch main --question "Q" --no-clip)
 assert_exit_ok "$?" "T2 exit 0"
 REQ=$(printf '%s\n' "$OUT" | awk '/^request_file:/{print $2; exit}')
+RUN_ID=$(printf '%s\n' "$OUT" | awk '/^run_id:/{print $2; exit}')
 CONTENT=$(cat "$REQ")
 assert_contains "$CONTENT" "GitHub" "T2 GH 指示文"
 assert_contains "$CONTENT" "main"   "T2 branch名"
 assert_not_contains "$CONTENT" '```diff' "T2 diff 非埋込"
 assert_not_contains "$CONTENT" 'def add' "T2 changed file 非埋込"
-SINCE=$(printf '%s\n' "$OUT" | awk '/^since:/{print $2; exit}')
-assert_contains "$CONTENT" "[[DONE-$SINCE]]" "T2 DONE marker injected"
+assert_contains "$CONTENT" "[[DONE-$RUN_ID]]" "T2 DONE marker uses run_id"
 cleanup_paths "$REPO" "$HOME/.pro-review/inbox/$PROJECT"
 
 # ---- T3: secret scan ヒット → exit 1 (ALLOW_SECRETS=1 で上書き可) ----

@@ -8,7 +8,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=_assert.sh
 source "$SCRIPT_DIR/_assert.sh"
 
-CMD="$HOME/.claude/skills/gpt-pro-review/scripts/pro-review-save-reply"
+CMD="$(repo_scripts_dir)/pro-review-save-reply"
 [ -x "$CMD" ] || _fail "pro-review-save-reply not executable at $CMD"
 
 # テスト隔離: 各 case で project 名を変える
@@ -73,24 +73,43 @@ RC=$?
 set -e
 assert_exit_nonzero "$RC" "T4 project '' 拒否"
 
-# ---- T5: since 数値以外 拒否 ----
-set +e
-echo "x" | "$CMD" "prr-t5-$$" "abc" >/dev/null 2>&1
-RC=$?
-set -e
-assert_exit_nonzero "$RC" "T5 since 'abc' 拒否"
-
+# ---- T5: run_id 不正値 拒否 ----
 set +e
 echo "x" | "$CMD" "prr-t5-$$" "-1" >/dev/null 2>&1
 RC=$?
 set -e
-assert_exit_nonzero "$RC" "T5 since '-1' 拒否"
+assert_exit_nonzero "$RC" "T5 run_id '-1' 拒否"
 
 set +e
 echo "x" | "$CMD" "prr-t5-$$" "" >/dev/null 2>&1
 RC=$?
 set -e
-assert_exit_nonzero "$RC" "T5 since '' 拒否"
+assert_exit_nonzero "$RC" "T5 run_id '' 拒否"
+
+set +e
+echo "x" | "$CMD" "prr-t5-$$" "../x" >/dev/null 2>&1
+RC=$?
+set -e
+assert_exit_nonzero "$RC" "T5 run_id '../x' 拒否"
+
+set +e
+echo "x" | "$CMD" "prr-t5-$$" "has space" >/dev/null 2>&1
+RC=$?
+set -e
+assert_exit_nonzero "$RC" "T5 run_id 'has space' 拒否"
+
+set +e
+echo "x" | "$CMD" "prr-t5-$$" "a/b" >/dev/null 2>&1
+RC=$?
+set -e
+assert_exit_nonzero "$RC" "T5 run_id 'a/b' 拒否"
+
+# path-safe 非数値 id（新 run_id 形式の簡易例）は受理
+P5="prr-t5b-$$"
+mkdir -p "$HOME/.pro-review/inbox/$P5"
+"$CMD" "$P5" "legacy-alpha" --text "ok" >/dev/null
+assert_file_exists "$HOME/.pro-review/inbox/$P5/REPLY-legacy-alpha.md" "T5 path-safe non-numeric run_id"
+cleanup_paths "$HOME/.pro-review/inbox/$P5"
 
 # ---- T6: 出力先が既に symlink の場合は拒否 ----
 P="prr-t6-$$"

@@ -3,7 +3,7 @@
 #
 # 役割（state-less。Path B の active-project は使わない）:
 #   1) project 名を引数で受け取り検証
-#   2) since（秒 epoch）を生成
+#   2) since（秒 epoch）= watch の mtime 閾値、run_id = ms epoch + short id = reply/DONE identity
 #   3) build-review-packet を --for-browser で呼ぶ
 #      - --github-branch BRANCH が来たら GitHub コネクタ指示モード（コード非埋込）
 #      - 来なければ通常の embed モード（diff + 変更ファイル本文 + 末尾 DONE マーカー）
@@ -16,6 +16,7 @@
 # 出力（後段スクリプト/エージェントが parse する。説明を足さないこと）:
 #   project_name: <project>
 #   since: <epoch_seconds>
+#   run_id: <epoch_ms>-<shorthex>
 #   inbox: <abs path>
 #   request_file: <abs path>
 #   clip: yes|no
@@ -60,7 +61,8 @@ OUTBOX="$BASE/outbox"
 mkdir -p "$INBOX" "$OUTBOX"
 
 SINCE="$(date +%s)"
-REQ="$OUTBOX/${PROJECT}-browser-${SINCE}.md"
+RUN_ID="$("$SK/pro-review-gen-run-id")"
+REQ="$OUTBOX/${PROJECT}-browser-${RUN_ID}.md"
 
 CLIP_FLAG=""
 [ "$NO_CLIP" = "1" ] && CLIP_FLAG="--no-clip"
@@ -85,6 +87,7 @@ if ! run_build \
       --question "$QUESTION" \
       --for-browser \
       --since "$SINCE" \
+      --run-id "$RUN_ID" \
       --out "$REQ" \
       $CLIP_FLAG \
       ${EXTRA[@]+"${EXTRA[@]}"} >/dev/null; then
@@ -98,6 +101,7 @@ CLIP="no"
 # 機械可読
 echo "project_name: $PROJECT"
 echo "since: $SINCE"
+echo "run_id: $RUN_ID"
 echo "inbox: $INBOX"
 echo "request_file: $REQ"
 echo "clip: $CLIP"

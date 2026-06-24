@@ -9,9 +9,10 @@ source "$SCRIPT_DIR/_assert.sh"
 
 BE="$(local_browser_embed_cmd)"
 trap 'rm -rf "$(dirname "$BE")"' EXIT
-SR="$HOME/.claude/skills/gpt-pro-review/scripts/pro-review-save-reply"
-WA="$HOME/.claude/skills/gpt-pro-review/scripts/pro-review-watch"
-FI="$HOME/.claude/skills/gpt-pro-review/scripts/pro-review-finish"
+REPO_SCRIPTS="$(repo_scripts_dir)"
+SR="$REPO_SCRIPTS/pro-review-save-reply"
+WA="$REPO_SCRIPTS/pro-review-watch"
+FI="$REPO_SCRIPTS/pro-review-finish"
 for f in "$BE" "$SR" "$WA" "$FI"; do
   [ -x "$f" ] || _fail "executable missing: $f"
 done
@@ -27,22 +28,23 @@ OUT=$("$BE" "$REPO" "$PROJECT" --question "find the bug" --no-clip)
 RC=$?
 assert_exit_ok "$RC" "S1 browser-embed exit 0"
 SINCE=$(printf '%s\n' "$OUT" | awk '/^since:/{print $2; exit}')
+RUN_ID=$(printf '%s\n' "$OUT" | awk '/^run_id:/{print $2; exit}')
 INBOX=$(printf '%s\n'   "$OUT" | awk '/^inbox:/{print $2; exit}')
 REQ=$(printf '%s\n'     "$OUT" | awk '/^request_file:/{print $2; exit}')
-[ -n "$SINCE" ] && [ -n "$INBOX" ] && [ -n "$REQ" ] || _fail "S1 machine-readable missing"
-_ok "S1 since=$SINCE inbox=$INBOX"
+[ -n "$SINCE" ] && [ -n "$RUN_ID" ] && [ -n "$INBOX" ] && [ -n "$REQ" ] || _fail "S1 machine-readable missing"
+_ok "S1 since=$SINCE run_id=$RUN_ID inbox=$INBOX"
 
 # Step 2: 偽 reply を save-reply 経由で投入（ChatGPT DOM 抽出を模擬）
-FAKE_REPLY=$(printf 'コードレビュー結果:\n[高] calc.py:2 — BUG_HERE は誤って追加されたトークン\n推奨修正: 削除\n[[DONE-%s]]' "$SINCE")
-SR_OUT=$(printf '%s' "$FAKE_REPLY" | "$SR" "$PROJECT" "$SINCE")
+FAKE_REPLY=$(printf 'コードレビュー結果:\n[高] calc.py:2 — BUG_HERE は誤って追加されたトークン\n推奨修正: 削除\n[[DONE-%s]]' "$RUN_ID")
+SR_OUT=$(printf '%s' "$FAKE_REPLY" | "$SR" "$PROJECT" "$RUN_ID")
 assert_exit_ok "$?" "S2 save-reply exit 0"
 assert_contains "$SR_OUT" "saved:" "S2 saved: line"
-REPLY_PATH="$INBOX/REPLY-$SINCE.md"
+REPLY_PATH="$INBOX/REPLY-$RUN_ID.md"
 assert_file_exists "$REPLY_PATH" "S2 reply persisted"
-assert_contains "$(cat "$REPLY_PATH")" "[[DONE-$SINCE]]" "S2 reply has marker"
+assert_contains "$(cat "$REPLY_PATH")" "[[DONE-$RUN_ID]]" "S2 reply has marker"
 
 # Step 3: watch で検知（保存済みなので即 hit、timeout 短く）
-W_OUT=$("$WA" "$INBOX" --since "$((SINCE - 1))" --timeout 5 --interval 1 2>/dev/null)
+W_OUT=$("$WA" "$INBOX" --run-id "$RUN_ID" --since "$((SINCE - 1))" --timeout 5 --interval 1 2>/dev/null)
 W_RC=$?
 assert_exit_ok "$W_RC" "S3 watch detected"
 assert_contains "$W_OUT" "REPLY:" "S3 watch REPLY line"

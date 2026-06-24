@@ -41,10 +41,11 @@ INBOX="$BASE/inbox/$PROJECT"
 printf '%s\n' "$PROJECT" > "$BASE/active-project"
 
 # 3. モード別の依頼文を生成（connector モード: フォルダ直読み＋inbox 書き戻し）
-START=$(date +%s)
+SINCE=$(date +%s)
+RUN_ID="$("$SK/pro-review-gen-run-id")"
 mkdir -p "$BASE/outbox"
-REQ="$BASE/outbox/${PROJECT}-${MODE}-${START}.md"
-REPLY_REL="inbox/$PROJECT/REPLY-${START}.md"
+REQ="$BASE/outbox/${PROJECT}-${MODE}-${RUN_ID}.md"
+REPLY_REL="inbox/$PROJECT/REPLY-${RUN_ID}.md"
 case "$MODE" in
   review)
     TASK="次の観点でコードレビュー: ${QUESTION:-正しさ(バグ/論理破綻)・セキュリティ・設計の妥当性・抜けているエッジケース。各指摘は file:line と 重大度(高/中/低) と 推奨修正}"
@@ -66,7 +67,7 @@ cat > "$REQ" <<EOF
 2) 必要なファイルを fetch(id) で順に取得して読む。
 3) $TASK
 4) 回答は **このチャットへの返信本文として**出力する（コネクタには書き込みツールが無いため）。
-5) 回答の **最終行に完了マーカー "[[DONE-${START}]]" を必ず1行で記載**する（応答完了の自動検知に使う）。
+5) 回答の **最終行に完了マーカー "[[DONE-${RUN_ID}]]" を必ず1行で記載**する（応答完了の自動検知に使う）。
 
 応答スタイル: 結論先出し、根拠と該当箇所(file:line)を添える、冗長な前置きは避ける。
 EOF
@@ -78,7 +79,8 @@ if command -v pbcopy >/dev/null 2>&1; then pbcopy < "$REQ" && CLIP="yes"; fi
 echo "project_name: $PROJECT"
 echo "mode: $MODE"
 echo "inbox: $INBOX"
-echo "since: $START"
+echo "since: $SINCE"
+echo "run_id: $RUN_ID"
 echo "request_file: $REQ"
 echo "clip: $CLIP"
 echo "---- ChatGPT(GPT-5.5 Pro)に貼る依頼 ----"

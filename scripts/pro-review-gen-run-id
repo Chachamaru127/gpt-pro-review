@@ -1,0 +1,10 @@
+#!/usr/bin/env python3
+"""Generate a path-safe stable run id: <epoch_ms>-<6 hex chars>.
+
+Used by pro-review-browser-embed / pro-review-start for request/reply/DONE identity.
+Watch continues to use numeric epoch seconds (since) as mtime threshold.
+"""
+import secrets
+import time
+
+print(f"{int(time.time_ns() // 1_000_000)}-{secrets.token_hex(3)}")

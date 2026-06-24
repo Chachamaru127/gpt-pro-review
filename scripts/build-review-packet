@@ -6,7 +6,7 @@
   connector     … コードは貼らず「接続済みMCPでこのパスを読んで」と指示（Secure MCP Tunnel 利用者向け）
   github-branch … コードは貼らず ChatGPT の GitHub コネクタを <branch> に向ける指示（Pro 通常チャット向け）
 
-ブラウザ運転 (`--for-browser`) では末尾に `[[DONE-<since>]]` マーカーを注入し、DOM 抽出側が
+ブラウザ運転 (`--for-browser`) では末尾に `[[DONE-<run_id>]]` マーカーを注入し、DOM 抽出側が
 生成完了を検知できるようにする。
 
 セキュリティ:
@@ -44,6 +44,8 @@ RESERVED_EMAIL_DOMAINS = frozenset({"example.com", "example.org", "example.net"}
 JP_PHONE_RE = re.compile(
     rb"(?<![.\d])0\d{1,4}[-\s]?\d{1,4}[-\s]?\d{4}(?![.\d])"
 )
+
+RUN_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 _DIFF_FENCE_RE = re.compile(r"```diff\n(.*?)\n```", re.DOTALL)
 
@@ -433,9 +435,11 @@ def main():
                     help="同梱本文の上限(embed)。default=80k はChatGPT UIの無音切り捨て対策")
     ap.add_argument("--no-clip", action="store_true", help="クリップボードへコピーしない")
     ap.add_argument("--for-browser", action="store_true",
-                    help="末尾に [[DONE-<since>]] マーカーを注入（DOM抽出側の完了検知用）")
+                    help="末尾に [[DONE-<run_id>]] マーカーを注入（DOM抽出側の完了検知用）")
     ap.add_argument("--since", default="",
-                    help="完了マーカーに使う非負整数（未指定なら現在 epoch 秒）")
+                    help="mtime 監視用の数値 epoch 秒（--run-id 未指定時の DONE マーカー fallback）")
+    ap.add_argument("--run-id", default="",
+                    help="DONE マーカー/request ファイル identity（path-safe: [A-Za-z0-9._-]+）")
     args = ap.parse_args()
     if args.base and args.uncommitted:
         eprint("--base と --uncommitted は併用できません"); sys.exit(2)
@@ -628,15 +632,20 @@ def main():
     out.append("3. 見落としやすい点・追加で確認すべきこと")
 
     if args.for_browser:
-        since = args.since.strip() or str(int(time.time()))
-        if not since.isdigit():
-            eprint(f"--since must be a non-negative integer, got: {since!r}"); sys.exit(2)
+        marker_id = args.run_id.strip() or args.since.strip() or str(int(time.time()))
+        if args.run_id.strip():
+            if not RUN_ID_RE.match(marker_id) or marker_id in (".", ".."):
+                eprint(f"--run-id must be path-safe [A-Za-z0-9._-]+, got: {marker_id!r}"); sys.exit(2)
+            if marker_id.startswith(("-", ".")):
+                eprint(f"--run-id must not start with '-' or '.', got: {marker_id!r}"); sys.exit(2)
+        elif not marker_id.isdigit():
+            eprint(f"--since must be a non-negative integer, got: {marker_id!r}"); sys.exit(2)
         out.append("")
         out.append("## 完了マーカー（必ず最終行に1行で記載）")
         out.append(f"応答の **最後の1行** に、以下のマーカーをそのまま記載してください。"
                    f"これは応答完了の自動検知に使われ、引用や説明文の中ではなく、本当に最終行に置く必要があります。")
         out.append("")
-        out.append(f"`[[DONE-{since}]]`")
+        out.append(f"`[[DONE-{marker_id}]]`")
 
     text = "\n".join(out)
 

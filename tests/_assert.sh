@@ -97,14 +97,30 @@ isolate_pro_review_workspace() {
   echo "$proj"
 }
 
+# repo_scripts_dir → この worktree の scripts/ 絶対パス。
+repo_scripts_dir() {
+  echo "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/scripts"
+}
+
 # local_browser_embed_cmd → repo-local build-review-packet を使う browser-embed 実行パス。
 # インストール済み skill が main worktree を指していても、テスト中の scripts/ を使う。
 local_browser_embed_cmd() {
   local repo_scripts patched dir
-  repo_scripts="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/scripts"
+  repo_scripts="$(repo_scripts_dir)"
   patched="$(mktemp -d -t prr-be-XXXXXX)"
   sed "s|SK=\"\$HOME/.claude/skills/gpt-pro-review/scripts\"|SK=\"$repo_scripts\"|" \
     "$repo_scripts/pro-review-browser-embed" > "$patched/pro-review-browser-embed"
   chmod +x "$patched/pro-review-browser-embed"
   echo "$patched/pro-review-browser-embed"
+}
+
+# local_start_cmd → repo-local pro-review-start（snapshot 以外は repo scripts 経由）。
+local_start_cmd() {
+  local repo_scripts patched
+  repo_scripts="$(repo_scripts_dir)"
+  patched="$(mktemp -d -t prr-st-XXXXXX)"
+  sed "s|SK=\"\$HOME/.claude/skills/gpt-pro-review/scripts\"|SK=\"$repo_scripts\"|" \
+    "$repo_scripts/pro-review-start" > "$patched/pro-review-start"
+  chmod +x "$patched/pro-review-start"
+  echo "$patched/pro-review-start"
 }

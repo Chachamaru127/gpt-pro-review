@@ -11,6 +11,7 @@ TESTS=(
   "test-browser-embed.sh"
   "test-search-fetch.sh"
   "test-start-template.sh"
+  "test-run-id.sh"
   "test-integration-path-a.sh"
   "test-integration-path-b.sh"
   "test-final-packet-scan.sh"

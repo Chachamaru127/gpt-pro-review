@@ -7,10 +7,12 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=_assert.sh
 source "$SCRIPT_DIR/_assert.sh"
 
-ST="$HOME/.claude/skills/gpt-pro-review/scripts/pro-review-start"
-SR="$HOME/.claude/skills/gpt-pro-review/scripts/pro-review-save-reply"
-WA="$HOME/.claude/skills/gpt-pro-review/scripts/pro-review-watch"
-FI="$HOME/.claude/skills/gpt-pro-review/scripts/pro-review-finish"
+ST="$(local_start_cmd)"
+trap 'rm -rf "$(dirname "$ST")"' EXIT
+REPO_SCRIPTS="$(repo_scripts_dir)"
+SR="$REPO_SCRIPTS/pro-review-save-reply"
+WA="$REPO_SCRIPTS/pro-review-watch"
+FI="$REPO_SCRIPTS/pro-review-finish"
 for f in "$ST" "$SR" "$WA" "$FI"; do
   [ -x "$f" ] || _fail "executable missing: $f"
 done
@@ -24,19 +26,20 @@ PROJECT="iB-$$"
 OUT=$("$ST" "$REPO" "$PROJECT" --mode review --question "are there bugs?")
 assert_exit_ok "$?" "S1 start exit 0"
 SINCE=$(printf '%s\n' "$OUT" | awk '/^since:/{print $2; exit}')
+RUN_ID=$(printf '%s\n' "$OUT" | awk '/^run_id:/{print $2; exit}')
 INBOX=$(printf '%s\n'   "$OUT" | awk '/^inbox:/{print $2; exit}')
-[ -n "$SINCE" ] && [ -n "$INBOX" ] || _fail "S1 machine-readable missing"
-_ok "S1 since=$SINCE inbox=$INBOX"
+[ -n "$SINCE" ] && [ -n "$RUN_ID" ] && [ -n "$INBOX" ] || _fail "S1 machine-readable missing"
+_ok "S1 since=$SINCE run_id=$RUN_ID inbox=$INBOX"
 
 # Step 2: 偽 reply を save-reply で投入（Thinking が出した本文を DOM 抽出した想定）
-FAKE_REPLY=$(printf 'workspace を search で見て fetch で読みました。\n結論: バグなし\n[[DONE-%s]]' "$SINCE")
-SR_OUT=$(printf '%s' "$FAKE_REPLY" | "$SR" "$PROJECT" "$SINCE")
+FAKE_REPLY=$(printf 'workspace を search で見て fetch で読みました。\n結論: バグなし\n[[DONE-%s]]' "$RUN_ID")
+SR_OUT=$(printf '%s' "$FAKE_REPLY" | "$SR" "$PROJECT" "$RUN_ID")
 assert_exit_ok "$?" "S2 save-reply exit 0"
-REPLY_PATH="$INBOX/REPLY-$SINCE.md"
+REPLY_PATH="$INBOX/REPLY-$RUN_ID.md"
 assert_file_exists "$REPLY_PATH" "S2 reply persisted"
 
 # Step 3: watch で検知
-W_OUT=$("$WA" "$INBOX" --since "$((SINCE - 1))" --timeout 5 --interval 1 2>/dev/null)
+W_OUT=$("$WA" "$INBOX" --run-id "$RUN_ID" --since "$((SINCE - 1))" --timeout 5 --interval 1 2>/dev/null)
 assert_exit_ok "$?" "S3 watch detected"
 assert_contains "$W_OUT" "REPLY:" "S3 REPLY line"
 

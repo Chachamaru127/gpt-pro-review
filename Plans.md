@@ -195,7 +195,7 @@ OpenAI 公式仕様の制約が判明したため、Skill を **2 パス構成**
 | 6.4 | [lane:gate][tdd:required] **(R3)** repo 別 `.pro-review-denylist` 機構を実装し、固有語は対象 repo から供給する。6.3 の最終 scan 面と同じ箇所で適用 | denylist 有り fixture は exit 1、無し fixture は従来通り、invalid regex は安全にエラー表示、skill 本体に固有語 0 件 | 6.3 | cc:完了 |
 | 6.5 | [lane:fast][tdd:required] 品質 baseline を固定: shell/python 構文チェック script と `tests/run-all.sh` への組み込みを追加する。formatter 導入や一括整形はしない | `tests/run-all.sh` が既存 6 テスト + syntax check を実行し、失敗時 exit 1 | 6.2 | cc:完了 |
 | 6.5c | [lane:gate][tdd:required] **(R11)** regression suite 拡張: 6.3〜6.4 / 6.7 / 6.10 / 6.11 系の新 test を `tests/run-all.sh` に常時組込。nodriver/live は skip 可だが DOM 抽出・marker・scan・MCP hardening の fixture unit は必ず実行 | `bash tests/run-all.sh` が新 test 込みで PASS。nodriver 未導入機でも緑（live のみ skip-with-pass） | 6.3a, 6.3b, 6.3c, 6.4 | cc:TODO |
-| 6.5b | [lane:gate][tdd:required] stable run id: `pro-review-browser-embed` / `pro-review-start` の `since`（現状 `date +%s` 秒精度）を ms epoch + short id の `run_id` 化し、embed/start/save-reply/watch/finish/reports で一貫使用する | 同一 project を同一秒に 2 回起動しても outbox / inbox / reports の名前が衝突しない fixture test が PASS。既存テスト回帰維持 | 6.3 | cc:TODO |
+| 6.5b | [lane:gate][tdd:required] stable run id: `pro-review-browser-embed` / `pro-review-start` の `since`（現状 `date +%s` 秒精度）を ms epoch + short id の `run_id` 化し、embed/start/save-reply/watch/finish/reports で一貫使用する | 同一 project を同一秒に 2 回起動しても outbox / inbox / reports の名前が衝突しない fixture test が PASS。既存テスト回帰維持 | 6.3 | cc:完了 |
 
 ## Stage 2: Path A（5.5Pro / nodriver ブラウザ直送）
 
