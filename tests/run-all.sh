@@ -12,6 +12,7 @@ TESTS=(
   "test-start-template.sh"
   "test-integration-path-a.sh"
   "test-integration-path-b.sh"
+  "test-final-packet-scan.sh"
 )
 
 pass=0; fail=0

@@ -71,7 +71,16 @@ EXTRA=()
 [ -n "$GH_BRANCH" ] && EXTRA+=(--github-branch "$GH_BRANCH")
 
 # stderr は親に流す（secret scan ヒット時の理由を見せたい）
-if ! "$SK/build-review-packet" \
+# --github-branch 明示時のみ guard 解除（connector 経路はユーザー opt-in）
+run_build() {
+  if [ -n "$GH_BRANCH" ]; then
+    env PRO_REVIEW_ALLOW_UNSCANNED_MODES=1 "$SK/build-review-packet" "$@"
+  else
+    "$SK/build-review-packet" "$@"
+  fi
+}
+
+if ! run_build \
       --repo "$REPO" \
       --question "$QUESTION" \
       --for-browser \

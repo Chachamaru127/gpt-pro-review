@@ -11,7 +11,11 @@
 
 セキュリティ:
 - embed する各ファイル内容に対して secret scan を実行し、ヒット時は ALLOW_SECRETS=1 で
-  明示的に上書きしない限り exit 1 で停止する（Path A の唯一の防御線）
+  明示的に上書きしない限り exit 1 で停止する
+- 組み立て済みの最終 packet（diff・質問・指示・ファイル全文・省略リストを含む）を
+  書出し/pbcopy 直前に 1 か所で secret scan する（全 mode 共通）
+- connector/github-branch mode は PRO_REVIEW_ALLOW_UNSCANNED_MODES=1 が無いと exit 2
+  （例外なし。github-branch は packet にブランチ名指示のみで実コードは載らず final scan 不能）
 - max-bytes default = 80_000（Skeptic 指摘: ChatGPT UI のトークン無音切り捨て対策）
 
 出力は Markdown を1ファイルに書き、可能なら pbcopy でクリップボードへ。
@@ -43,12 +47,22 @@ def lang_of(path):
     return LANG.get(os.path.splitext(path)[1].lower(), "")
 
 def secret_hits(rel, data):
-    """data に秘密情報パターンがあれば [(rel, pattern_name)] を返す。"""
+    """data(bytes) に秘密情報パターンがあれば [(rel, pattern_name)] を返す。"""
     hits = []
     for pat in SECRET_PATTERNS:
         if pat.search(data):
             hits.append((rel, pat.pattern.decode("utf-8", "replace")))
     return hits
+
+def secret_hits_text(label, text):
+    """text(str) に秘密情報パターンがあれば [(label, pattern_name)] を返す。"""
+    return secret_hits(label, text.encode("utf-8"))
+
+def report_secret_violations(violations, context):
+    eprint(f"✗ 秘密情報の疑いを検出。{context} を中止:")
+    for rel, pat in violations:
+        eprint(f"  - {rel} (pattern: {pat[:60]})")
+    eprint("  誤検知なら ALLOW_SECRETS=1 を付けて再実行")
 
 def main():
     ap = argparse.ArgumentParser(description="外部Proモデル用のレビュー依頼パケットを作る")
@@ -77,6 +91,11 @@ def main():
     if args.github_branch:
         # GitHub ブランチ指示モードに切替（コード非埋込）
         args.mode = "github-branch"
+
+    if args.mode in ("connector", "github-branch"):
+        if os.environ.get("PRO_REVIEW_ALLOW_UNSCANNED_MODES") != "1":
+            eprint("✗ connector/github-branch mode blocked: set PRO_REVIEW_ALLOW_UNSCANNED_MODES=1 (final packet scan required)")
+            sys.exit(2)
 
     # --repo の遅延評価: argparse default で os.getcwd() を呼ぶと cwd 消失時に死ぬため
     if args.repo is None:
@@ -214,11 +233,7 @@ def main():
             out.append("```")
             out.append("")
         if secret_violations:
-            # 中止: ChatGPT に秘密情報を流す事故の唯一の防御線
-            eprint("✗ 秘密情報の疑いを検出。embed を中止:")
-            for rel, pat in secret_violations:
-                eprint(f"  - {rel} (pattern: {pat[:60]})")
-            eprint("  誤検知なら ALLOW_SECRETS=1 を付けて再実行")
+            report_secret_violations(secret_violations, "embed")
             sys.exit(1)
         if omitted:
             # Skeptic 対策: truncated 旗を本文末尾近くに明示。ChatGPT が「全部見た」と勘違いするのを防ぐ
@@ -246,6 +261,12 @@ def main():
         out.append(f"`[[DONE-{since}]]`")
 
     text = "\n".join(out)
+
+    allow_secrets = os.environ.get("ALLOW_SECRETS") == "1"
+    final_hits = secret_hits_text("final packet", text)
+    if final_hits and not allow_secrets:
+        report_secret_violations(final_hits, "packet 出力")
+        sys.exit(1)
 
     os.makedirs(os.path.dirname(os.path.abspath(args.out)) or ".", exist_ok=True)
     with open(args.out, "w") as f:
