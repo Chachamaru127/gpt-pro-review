@@ -68,6 +68,31 @@ assert_exit_ok "$(scan_fixture clean_json '{"name": "demo", "count": 3}')" \
   "clean JSON without secret allowed"
 assert_exit_ok "$(scan_fixture clean_json_key '{"api_key": "placeholder"}')" \
   "short api_key placeholder allowed"
+
+# ---- git diff index line false positive regression (6.3a-fix-fp564) ----
+REPO=$(mkrepo)
+(cd "$REPO" && echo "line2" >> calc.py && git add calc.py && git commit -qm "change")
+(cd "$REPO" && echo "line3" >> calc.py)
+set +e
+"$BUILD" --repo "$REPO" --out "$OUT" --no-clip 2>/dev/null
+RC=$?
+set -e
+assert_exit_ok "$RC" "git diff index line does not false-positive phone scan"
+assert_file_exists "$OUT" "git diff index line packet written"
+cleanup_paths "$REPO" "$OUT"
+
+# ---- real JP phone in diff +/- content still blocks ----
+REPO=$(mkrepo)
+(cd "$REPO" && echo "tel=090-1234-5678" >> calc.py)
+set +e
+"$BUILD" --repo "$REPO" --out "$OUT" --no-clip 2>/dev/null
+RC=$?
+set -e
+assert_exit_nonzero "$RC" "JP phone in uncommitted diff content blocks"
+cleanup_paths "$REPO" "$OUT"
+assert_exit_nonzero "$(scan_fixture phone_landline 'contact=03-1234-5678')" \
+  "JP landline in packet blocks"
+
 assert_exit_nonzero "$(scan_fixture pem 'key_path=/home/user/.ssh/id_rsa.pem')" \
   ".pem path in packet blocks"
 assert_exit_nonzero "$(scan_fixture pem_slash 'ssl_path=/etc/ssl/server.pem')" \

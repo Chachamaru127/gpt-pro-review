@@ -7,7 +7,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=_assert.sh
 source "$SCRIPT_DIR/_assert.sh"
 
-BE="$HOME/.claude/skills/gpt-pro-review/scripts/pro-review-browser-embed"
+BE="$(local_browser_embed_cmd)"
+trap 'rm -rf "$(dirname "$BE")"' EXIT
 SR="$HOME/.claude/skills/gpt-pro-review/scripts/pro-review-save-reply"
 WA="$HOME/.claude/skills/gpt-pro-review/scripts/pro-review-watch"
 FI="$HOME/.claude/skills/gpt-pro-review/scripts/pro-review-finish"

@@ -96,3 +96,15 @@ isolate_pro_review_workspace() {
   done
   echo "$proj"
 }
+
+# local_browser_embed_cmd → repo-local build-review-packet を使う browser-embed 実行パス。
+# インストール済み skill が main worktree を指していても、テスト中の scripts/ を使う。
+local_browser_embed_cmd() {
+  local repo_scripts patched dir
+  repo_scripts="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/scripts"
+  patched="$(mktemp -d -t prr-be-XXXXXX)"
+  sed "s|SK=\"\$HOME/.claude/skills/gpt-pro-review/scripts\"|SK=\"$repo_scripts\"|" \
+    "$repo_scripts/pro-review-browser-embed" > "$patched/pro-review-browser-embed"
+  chmod +x "$patched/pro-review-browser-embed"
+  echo "$patched/pro-review-browser-embed"
+}

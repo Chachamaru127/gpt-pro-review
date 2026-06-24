@@ -12,7 +12,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=_assert.sh
 source "$SCRIPT_DIR/_assert.sh"
 
-CMD="$HOME/.claude/skills/gpt-pro-review/scripts/pro-review-browser-embed"
+CMD="$(local_browser_embed_cmd)"
+trap 'rm -rf "$(dirname "$CMD")"' EXIT
 [ -x "$CMD" ] || _fail "pro-review-browser-embed not executable at $CMD"
 
 echo "[test-browser-embed] start"

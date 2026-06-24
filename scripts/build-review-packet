@@ -41,6 +41,53 @@ EMAIL_RE = re.compile(
 )
 RESERVED_EMAIL_DOMAINS = frozenset({"example.com", "example.org", "example.net"})
 
+JP_PHONE_RE = re.compile(
+    rb"(?<![.\d])0\d{1,4}[-\s]?\d{1,4}[-\s]?\d{4}(?![.\d])"
+)
+
+_DIFF_FENCE_RE = re.compile(r"```diff\n(.*?)\n```", re.DOTALL)
+
+_GIT_DIFF_METADATA_PREFIXES = (
+    "diff --git ",
+    "index ",
+    "@@ ",
+    "--- ",
+    "+++ ",
+    "old mode ",
+    "new mode ",
+    "deleted file mode ",
+    "new file mode ",
+    "similarity index ",
+    "rename from ",
+    "rename to ",
+)
+
+def _is_git_diff_metadata_line(line):
+    s = line.lstrip()
+    if any(s.startswith(p) for p in _GIT_DIFF_METADATA_PREFIXES):
+        return True
+    return s.startswith("Binary files ") and " differ" in s
+
+def _strip_diff_block_metadata(diff_body):
+    """Drop git structural lines; keep +/- content lines for secret scan."""
+    kept = []
+    for line in diff_body.splitlines(keepends=True):
+        if _is_git_diff_metadata_line(line):
+            continue
+        kept.append(line)
+    return "".join(kept)
+
+def content_for_secret_scan(text):
+    """Prepare final-packet text for secret/PII scan (strip git diff metadata)."""
+    def repl(m):
+        return "```diff\n" + _strip_diff_block_metadata(m.group(1)) + "\n```"
+    return _DIFF_FENCE_RE.sub(repl, text)
+
+def is_plausible_jp_phone(match_bytes):
+    """True when matched bytes contain 10–11 digits (valid JP phone length)."""
+    digits = sum(1 for b in match_bytes if 0x30 <= b <= 0x39)
+    return 10 <= digits <= 11
+
 # 高 signal な秘密情報・PII パターン（project 固有 literal は含めない）。
 SECRET_PATTERNS = [
     re.compile(rb"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
@@ -54,7 +101,10 @@ SECRET_PATTERNS = [
         rb"(?<![.\w])(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)"
         rb"(?:\.(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)){3}(?![.\d])"
     ),
-    re.compile(rb"(?<![.\d])0\d{1,4}[-\s]?\d{1,4}[-\s]?\d{4}(?![.\d])"),
+    # JP phone: 10–11 digits total (0X-XXXX-XXXX / 0XX-XXXX-XXXX / 0XXXXXXXXXX).
+    # Digit count validated in secret_hits — bare regex alone false-positives on
+    # git index lines like `index f083797..04ad012 100644`.
+    JP_PHONE_RE,
     re.compile(rb"(?<![.\d])\d{3}-\d{4}(?![.\d])"),
     re.compile(
         rb"(?i)"
@@ -238,13 +288,18 @@ def secret_hits(rel, data):
                 if not is_reserved_example_email(m.group(1)):
                     hits.append((rel, pat.pattern.decode("utf-8", "replace")))
                     break
+        elif pat is JP_PHONE_RE:
+            for m in pat.finditer(data):
+                if is_plausible_jp_phone(m.group(0)):
+                    hits.append((rel, pat.pattern.decode("utf-8", "replace")))
+                    break
         elif pat.search(data):
             hits.append((rel, pat.pattern.decode("utf-8", "replace")))
     return hits
 
 def secret_hits_text(label, text):
     """text(str) に秘密情報パターンがあれば [(label, pattern_name)] を返す。"""
-    return secret_hits(label, text.encode("utf-8"))
+    return secret_hits(label, content_for_secret_scan(text).encode("utf-8"))
 
 def report_secret_violations(violations, context):
     eprint(f"✗ 秘密情報の疑いを検出。{context} を中止:")
