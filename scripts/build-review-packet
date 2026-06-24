@@ -301,6 +301,114 @@ def secret_hits_text(label, text):
     """text(str) に秘密情報パターンがあれば [(label, pattern_name)] を返す。"""
     return secret_hits(label, content_for_secret_scan(text).encode("utf-8"))
 
+DENYLIST_FILENAME = ".pro-review-denylist"
+DENYLIST_OMIT_REASON = "denylist source omitted from packet"
+
+def is_repo_root_denylist(rel_path):
+    """repo 直下の .pro-review-denylist のみ True（サブディレクトリ同名は対象外）。"""
+    rel_norm = rel_path.replace("\\", "/")
+    return rel_norm == DENYLIST_FILENAME
+
+def filter_denylist_from_diff(diff):
+    """repo-root .pro-review-denylist の diff hunk を除去し、(filtered_diff, omitted_entries, skip_embed_paths) を返す。"""
+    if not diff:
+        return diff, [], set()
+    excluded = []
+    skip_embed_paths = set()
+    kept = []
+    for block in re.split(r"(?=^diff --git )", diff, flags=re.MULTILINE):
+        if not block:
+            continue
+        if not block.startswith("diff --git "):
+            kept.append(block)
+            continue
+        parsed = parse_diff_git_paths(block)
+        if parsed is None:
+            kept.append(block)
+            continue
+        path_a, path_b = parsed
+        if is_repo_root_denylist(path_a) or is_repo_root_denylist(path_b):
+            entry = format_omitted_entry(DENYLIST_FILENAME, DENYLIST_OMIT_REASON)
+            if entry not in excluded:
+                excluded.append(entry)
+            for path in (path_a, path_b):
+                if path != "/dev/null":
+                    skip_embed_paths.add(path)
+            continue
+        kept.append(block)
+    return "".join(kept), excluded, skip_embed_paths
+
+def _parse_denylist_lines(lines, source_label):
+    """denylist 行列を compiled regex に。不正 regex は source + 行番号付きで exit 1。"""
+    patterns = []
+    for line_num, line in enumerate(lines, start=1):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped[0] == "#":
+            continue
+        try:
+            compiled = re.compile(stripped)
+        except re.error as exc:
+            eprint(f"✗ invalid regex in {source_label} line {line_num}: {exc}")
+            eprint(f"  pattern preview: {stripped[:80]}")
+            sys.exit(1)
+        patterns.append((source_label, line_num, stripped, compiled))
+    return patterns
+
+def load_denylist_from_disk(repo):
+    """repo 直下の .pro-review-denylist を読み込む。無ければ []。"""
+    path = os.path.join(repo, DENYLIST_FILENAME)
+    if not os.path.isfile(path):
+        return []
+    with open(path, encoding="utf-8") as f:
+        return _parse_denylist_lines(f.readlines(), DENYLIST_FILENAME)
+
+def load_denylist_from_git(repo, ref):
+    """git ref 上の .pro-review-denylist を読み込む。無ければ []。"""
+    r = sh(["git", "show", f"{ref}:{DENYLIST_FILENAME}"], repo)
+    if r.returncode != 0:
+        return []
+    source_label = f"{ref}:{DENYLIST_FILENAME}"
+    return _parse_denylist_lines(r.stdout.splitlines(), source_label)
+
+def load_combined_denylist(repo, is_git, base=None):
+    """trusted pre-change denylist + candidate disk denylist の union を返す。
+
+    uncommitted/default: HEAD + disk
+    --base BASE: BASE + disk
+    non-git: disk only
+    """
+    patterns = []
+    seen = set()
+    if is_git:
+        ref = base if base else "HEAD"
+        for pat in load_denylist_from_git(repo, ref):
+            key = pat[2]
+            if key not in seen:
+                seen.add(key)
+                patterns.append(pat)
+    for pat in load_denylist_from_disk(repo):
+        key = pat[2]
+        if key not in seen:
+            seen.add(key)
+            patterns.append(pat)
+    return patterns
+
+def denylist_hits_text(label, text, denylist_patterns):
+    """text(str) が repo denylist にマッチすれば [(label, source, line_num, preview)] を返す。"""
+    hits = []
+    for source_label, line_num, pat_str, compiled in denylist_patterns:
+        if compiled.search(text):
+            preview = pat_str if len(pat_str) <= 60 else pat_str[:60] + "..."
+            hits.append((label, source_label, line_num, preview))
+    return hits
+
+def report_denylist_violations(violations):
+    eprint("✗ repo denylist blocked packet output (.pro-review-denylist):")
+    for label, source_label, line_num, preview in violations:
+        eprint(f"  - {label} matched {source_label} line {line_num} (pattern: {preview})")
+
 def report_secret_violations(violations, context):
     eprint(f"✗ 秘密情報の疑いを検出。{context} を中止:")
     for rel, pat in violations:
@@ -389,9 +497,15 @@ def main():
     branch = sh(["git","rev-parse","--abbrev-ref","HEAD"], repo).stdout.strip() if is_git else ""
 
     diff_excluded = []
-    diff_skip_paths = set()
+    diff_skip_reasons = {}
     if diff:
-        diff, diff_excluded, diff_skip_paths = filter_diff_exclude_secretish(diff)
+        diff, diff_excluded, secret_skip_paths = filter_diff_exclude_secretish(diff)
+        for path in secret_skip_paths:
+            diff_skip_reasons[path] = "secret-ish rename/copy in diff"
+        diff, denylist_diff_excluded, denylist_skip_paths = filter_denylist_from_diff(diff)
+        diff_excluded.extend(denylist_diff_excluded)
+        for path in denylist_skip_paths:
+            diff_skip_reasons[path] = DENYLIST_OMIT_REASON
 
     q = args.question.strip() or (
         "正しさ(バグ/論理破綻)、セキュリティ、設計の妥当性、抜けている観点・エッジケースを優先度順に。"
@@ -465,12 +579,15 @@ def main():
             p = os.path.join(repo, c)
             if not os.path.isfile(p):
                 continue
+            if is_repo_root_denylist(c):
+                omitted.append(format_omitted_entry(c, DENYLIST_OMIT_REASON))
+                continue
             ex_reason = embed_exclude_reason(c)
             if ex_reason:
                 omitted.append(format_omitted_entry(c, ex_reason))
                 continue
-            if c in diff_skip_paths:
-                omitted.append(format_omitted_entry(c, "secret-ish rename/copy in diff"))
+            if c in diff_skip_reasons:
+                omitted.append(format_omitted_entry(c, diff_skip_reasons[c]))
                 continue
             try:
                 data = open(p, "rb").read()
@@ -528,6 +645,13 @@ def main():
     if final_hits and not allow_secrets:
         report_secret_violations(final_hits, "packet 出力")
         sys.exit(1)
+
+    denylist_patterns = load_combined_denylist(repo, is_git, base=args.base)
+    if denylist_patterns:
+        deny_hits = denylist_hits_text("final packet", text, denylist_patterns)
+        if deny_hits:
+            report_denylist_violations(deny_hits)
+            sys.exit(1)
 
     os.makedirs(os.path.dirname(os.path.abspath(args.out)) or ".", exist_ok=True)
     with open(args.out, "w") as f:

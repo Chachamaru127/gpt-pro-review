@@ -16,6 +16,7 @@ TESTS=(
   "test-secret-scan-extended.sh"
   "test-pathA-filename-exclude.sh"
   "test-prompt-injection.sh"
+  "test-denylist.sh"
 )
 
 pass=0; fail=0
