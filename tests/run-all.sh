@@ -13,6 +13,9 @@ TESTS=(
   "test-integration-path-a.sh"
   "test-integration-path-b.sh"
   "test-final-packet-scan.sh"
+  "test-secret-scan-extended.sh"
+  "test-pathA-filename-exclude.sh"
+  "test-prompt-injection.sh"
 )
 
 pass=0; fail=0

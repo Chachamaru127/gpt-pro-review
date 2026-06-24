@@ -96,4 +96,30 @@ assert_file_not_exists "$OUT" "T6 no packet on guard (--for-browser must not byp
 cleanup_paths "$REPO"
 rm -f "$OUT" /tmp/prr-final-scan-err-$$.txt
 
+# ---- T7: git diff uses -M -C --find-copies-harder for rename/copy detection ----
+grep -qE 'git.*diff.*-M.*-C.*--find-copies-harder' "$BUILD" \
+  || _fail "build-review-packet must pass -M -C --find-copies-harder to git diff"
+_ok "git diff uses -M -C --find-copies-harder"
+
+# ---- T8: .env->config.txt move (rename undetected) with high-entropy secret -> exit 1 ----
+# Simulates delete .env + add config.txt without git mv link; final scan catches embedded config.txt.
+REPO=$(mkrepo)
+(
+  cd "$REPO"
+  echo 'api_key=abcdefghijklmnopqrstuvwxyz0123456789ABCD' > .env
+  git add .env && git commit -qm "track env"
+  git rm --cached .env 2>/dev/null || true
+  rm -f .env
+  echo 'api_key=abcdefghijklmnopqrstuvwxyz0123456789ABCD' > config.txt
+)
+set +e
+"$BUILD" --repo "$REPO" --out "$OUT" --no-clip 2>/tmp/prr-final-scan-err-$$.txt
+RC=$?
+set -e
+assert_exit_nonzero "$RC" "T8 .env->config.txt secret leak blocks (exit 1)"
+grep -q "config.txt" /tmp/prr-final-scan-err-$$.txt || _fail "T8 stderr mentions config.txt"
+assert_file_not_exists "$OUT" "T8 no packet written on secret hit"
+cleanup_paths "$REPO"
+rm -f "$OUT" /tmp/prr-final-scan-err-$$.txt
+
 echo "[test-final-packet-scan] PASS"
