@@ -60,3 +60,17 @@
 - summary: none
 - finish closed exposure: yes, active project cleared
 - unresolved: ChatGPT chat did not have pro-review Tunnel connector tools enabled; model returned tool-unavailable text instead of calling `search` / `fetch` / `save_report`
+
+## Latest smoke: Path A Deep Research UI selection (2026-06-25 JST)
+
+- repo: `/Users/tachibanashuuta/LocalWork/Code/gpt-pro-review`
+- project: `gpt-pro-review-deepresearch-live-1782381279`
+- run_id: `1782381279860-fac744`
+- command: targeted `build-review-packet --files ... --deep-research on` followed by `scripts/pro-review-browser-drive --deep-research on`
+- request_file: `/Users/tachibanashuuta/.pro-review/outbox/gpt-pro-review-deepresearch-live-1782381279-browser-1782381279860-fac744.md`
+- browser profile: `/Users/tachibanashuuta/.pro-review/browser/profile`
+- login setup: marker present; `pro-review-doctor` reported `OK nodriver venv module importable`
+- result: `FALLBACK:deep research unavailable`
+- reply path: none
+- report bundle: none
+- unresolved: dedicated ChatGPT UI did not expose Deep Research via `/Deepresearch` slash suggestions or the opened `composer-plus-btn` menu. Driver failed closed before sending the review request.

@@ -33,6 +33,29 @@ pro-review-run --pro \
   --question "bug と security を見て"
 ```
 
+Path A では ChatGPT Web の Search / Deep Research 方針を request に入れられる。
+どちらも既定は `auto`。
+`auto` は UI の Auto 表示ではなく、この skill の方針名。
+Web Search は ChatGPT 側の自動判断に任せる。
+Deep Research は `on`、または `auto` でレビュー観点から複数ソース調査が必要と判定した時に、Nodriver が送信前に `/Deepresearch` または tools menu から UI/mode 選択を試す。
+
+```bash
+pro-review-run --pro \
+  --repo /path/to/repo \
+  --project my-review \
+  --web-search on \
+  --deep-research off \
+  --question "最新仕様の確認は web も使って review"
+```
+
+| Option | 値 | 意味 |
+|---|---|---|
+| `--web-search` | `auto` / `on` / `off` | Search を ChatGPT 判断 / 明示使用 / 禁止にする |
+| `--deep-research` | `auto` / `on` / `off` | Deep Research を ChatGPT 判断 / 明示使用 / 禁止にする |
+
+Deep Research は複数ソースを横断して調査・統合する重い作業向け。
+通常の repo-local なコードレビューだけなら `auto` のままでよい。
+
 失敗時に `FALLBACK:<reason>` が出たら、表示された `manual_save:` の形で手貼り保存できる。
 
 ## Path B: 非 5.5Pro + MCP

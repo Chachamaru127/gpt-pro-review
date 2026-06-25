@@ -46,6 +46,7 @@ JP_PHONE_RE = re.compile(
 )
 
 RUN_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+TOOL_POLICY_CHOICES = ("auto", "on", "off")
 
 _DIFF_FENCE_RE = re.compile(r"```diff\n(.*?)\n```", re.DOTALL)
 
@@ -417,6 +418,46 @@ def report_secret_violations(violations, context):
         eprint(f"  - {rel} (pattern: {pat[:60]})")
     eprint("  誤検知なら ALLOW_SECRETS=1 を付けて再実行")
 
+def append_chatgpt_tool_policy(out, web_search, deep_research):
+    """Append ChatGPT Search / Deep Research policy to the review packet."""
+    out.append("## ChatGPT ツール利用方針")
+    out.append("")
+    out.append(f"- web_search: `{web_search}`")
+    if web_search == "auto":
+        out.append(
+            "  - 既定は ChatGPT 側の判断です。現在情報・外部仕様・CVE・ライブラリ更新・競合比較など、"
+            "web がレビュー品質を上げる場合だけ Search を使ってください。repo 内コード確認だけなら使わなくてよいです。"
+        )
+    elif web_search == "on":
+        out.append(
+            "  - Search を使って、外部/最新情報が関係する主張には出典リンクを添えてください。"
+            "Search が使えない場合は `WEB_SEARCH_STATUS=unavailable` と明記してください。"
+        )
+    else:
+        out.append(
+            "  - Search は使わないでください。外部/最新情報が必要な論点は推測せず `要確認` としてください。"
+        )
+    out.append(f"- deep_research: `{deep_research}`")
+    if deep_research == "auto":
+        out.append(
+            "  - `auto` は ChatGPT UI の Auto ボタン名ではなく、この依頼の方針名です。"
+            "Path A live では Nodriver がレビュー観点から複数ソース調査が必要と判断した場合だけ、"
+            "送信前に Deep Research UI/mode の選択を試します。通常のコードレビューや短い確認では使わなくてよいです。"
+        )
+    elif deep_research == "on":
+        out.append(
+            "  - Deep Research を使ってください。Path A live では送信前に Nodriver が Deep Research UI/mode を選択します。"
+            "利用可能ならリサーチ計画を立て、複数ソースを確認し、出典付きで結論を返してください。"
+            "現在のチャット surface が Deep Research ではない/開始できない場合は "
+            "`STOP_REASON=deep_research_unavailable` と "
+            "`NEXT_ACTION=ChatGPTでDeep Researchを選択して再実行` を返してください。"
+        )
+    else:
+        out.append(
+            "  - Deep Research は使わないでください。必要なら通常のレビュー範囲内で `要確認` としてください。"
+        )
+    out.append("")
+
 def main():
     ap = argparse.ArgumentParser(description="外部Proモデル用のレビュー依頼パケットを作る")
     ap.add_argument("--base", help="このブランチとの差分をレビュー対象に (例 main)")
@@ -440,6 +481,10 @@ def main():
                     help="mtime 監視用の数値 epoch 秒（--run-id 未指定時の DONE マーカー fallback）")
     ap.add_argument("--run-id", default="",
                     help="DONE マーカー/request ファイル identity（path-safe: [A-Za-z0-9._-]+）")
+    ap.add_argument("--web-search", choices=TOOL_POLICY_CHOICES, default="auto",
+                    help="Path A/Pro prompt の Web Search 方針: auto|on|off（default: auto）")
+    ap.add_argument("--deep-research", choices=TOOL_POLICY_CHOICES, default="auto",
+                    help="Path A/Pro prompt の Deep Research 方針: auto|on|off（default: auto）")
     args = ap.parse_args()
     if args.base and args.uncommitted:
         eprint("--base と --uncommitted は併用できません"); sys.exit(2)
@@ -536,6 +581,7 @@ def main():
     out.append("## レビュー観点")
     out.append(q)
     out.append("")
+    append_chatgpt_tool_policy(out, args.web_search, args.deep_research)
 
     if args.mode == "github-branch":
         # GitHub コネクタ指示モード: コードは貼らない

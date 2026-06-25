@@ -133,4 +133,47 @@ assert calls[0][2] == "1"
 PY
 assert_exit_ok "$?" "T8 nodriver venv reexec uses venv path"
 
+python3 - "$DRV" <<'PY'
+import importlib.machinery
+import sys
+mod = importlib.machinery.SourceFileLoader("pro_review_browser_drive_policy", sys.argv[1]).load_module()
+normal = """# Review
+
+## レビュー観点
+bug と security を見て
+
+## ChatGPT ツール利用方針
+
+- deep_research: `auto`
+"""
+current = """# Review
+
+## レビュー観点
+最新CVEと公式ドキュメントを横断して確認して
+
+## ChatGPT ツール利用方針
+
+- deep_research: `auto`
+"""
+explicit = "- deep_research: `on`\n"
+assert mod.parse_deep_research_policy(explicit) == "on"
+assert mod.decide_deep_research_selection("on", normal)[0] is True
+assert mod.decide_deep_research_selection("off", current)[0] is False
+assert mod.decide_deep_research_selection("auto", normal)[0] is False
+assert mod.decide_deep_research_selection("auto", current)[0] is True
+assert mod.js_object({"ok": True}) == {"ok": True}
+assert mod.js_object('{"ok": true, "label": "Deep Research"}')["ok"] is True
+class Obj:
+    pass
+remote = Obj()
+remote.deep_serialized_value = Obj()
+remote.deep_serialized_value.value = [["ok", {"type": "boolean", "value": True}], ["label", {"type": "string", "value": "Deep Research"}]]
+assert mod.js_object(remote) == {"ok": True, "label": "Deep Research"}
+PY
+assert_exit_ok "$?" "T9 deep research policy decision"
+
+OUT=$("$DRV" --fixture-html "$SUCCESS" --run-id "$RID" --deep-research on)
+assert_exit_ok "$?" "T10 fixture accepts deep research flag"
+assert_contains "$OUT" "[[DONE-$RID]]" "T10 fixture still extracts marker"
+
 echo "[test-browser-drive] PASS"

@@ -17,17 +17,26 @@ assert_file_exists "$ROOT/docs/manual-checklist.md" "T1 manual checklist exists"
 SKILL=$(cat "$ROOT/SKILL.md")
 USAGE=$(cat "$ROOT/docs/usage.md")
 SETUP=$(cat "$ROOT/SETUP-layer2.md")
+SPEC=$(cat "$ROOT/docs/spec/00-project-spec.md")
 
 assert_contains "$SKILL" "pro-review-run --pro" "T2 SKILL Path A command"
 assert_contains "$SKILL" "pro-review-run --thinking" "T2 SKILL Path B command"
+assert_contains "$SKILL" "--web-search auto|on|off" "T2 SKILL web search policy"
+assert_contains "$SKILL" "--deep-research auto|on|off" "T2 SKILL deep research policy"
+assert_contains "$SKILL" "/Deepresearch" "T2 SKILL deep research UI selection"
 assert_contains "$SKILL" "save_report" "T2 SKILL save_report"
 assert_contains "$SKILL" "reports/<project>/<run_id>" "T2 SKILL bundle"
 assert_not_contains "$SKILL" "claude-in-chrome" "T2 retired claude-in-chrome removed"
 assert_not_contains "$SKILL" "API route は採用" "T2 no API route recommendation"
 
+assert_contains "$USAGE" "--web-search" "T3 usage web search option"
+assert_contains "$USAGE" "--deep-research" "T3 usage deep research option"
+assert_contains "$USAGE" "Nodriver" "T3 usage nodriver deep research selection"
 assert_contains "$USAGE" "FALLBACK:" "T3 usage fallback"
 assert_contains "$USAGE" "STOP_REASON" "T3 usage stop reason"
 assert_contains "$SETUP" "pro-review-tunnel-check" "T3 setup tunnel check"
 assert_contains "$SETUP" "save_report" "T3 setup save_report"
+assert_contains "$SPEC" "Web Search / Deep Research" "T3 spec tool policy"
+assert_contains "$SPEC" "/Deepresearch" "T3 spec deep research UI selection"
 
 echo "[test-docs-sync] PASS"

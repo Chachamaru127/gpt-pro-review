@@ -47,6 +47,8 @@ assert_contains "$CONTENT" "[[DONE-$RUN_ID]]" "T1 DONE marker uses run_id"
 assert_not_contains "$CONTENT" "[[DONE-$SINCE]]" "T1 DONE not seconds-only"
 assert_contains "$CONTENT" "BUGGY_TOKEN"      "T1 changed file content embedded"
 assert_contains "$CONTENT" "find bugs"        "T1 question included"
+assert_contains "$CONTENT" 'web_search: `auto`' "T1 default web search policy"
+assert_contains "$CONTENT" 'deep_research: `auto`' "T1 default deep research policy"
 
 cleanup_paths "$REPO" "$INBOX_LINE"
 
@@ -107,5 +109,20 @@ RC=$?
 set -e
 assert_exit_nonzero "$RC" "T5 project '../etc' 拒否"
 cleanup_paths "$REPO"
+
+# ---- T6: Pro tool policy 明示指定 ----
+REPO=$(mkrepo)
+PROJECT="brem-t6-$$"
+OUT=$("$CMD" "$REPO" "$PROJECT" --question "Q" --web-search off --deep-research on --no-clip)
+assert_exit_ok "$?" "T6 explicit tool policy exit"
+REQ=$(printf '%s\n' "$OUT" | awk '/^request_file:/{print $2; exit}')
+CONTENT=$(cat "$REQ")
+assert_contains "$OUT" "web_search: off" "T6 machine web search policy"
+assert_contains "$OUT" "deep_research: on" "T6 machine deep research policy"
+assert_contains "$CONTENT" 'web_search: `off`' "T6 request web search off"
+assert_contains "$CONTENT" "Search は使わない" "T6 request web search off instruction"
+assert_contains "$CONTENT" 'deep_research: `on`' "T6 request deep research on"
+assert_contains "$CONTENT" "STOP_REASON=deep_research_unavailable" "T6 deep research unavailable fallback"
+cleanup_paths "$REPO" "$HOME/.pro-review/inbox/$PROJECT"
 
 echo "[test-browser-embed] PASS"

@@ -37,6 +37,26 @@ pro-review-browser-setup --mark-logged-in
 pro-review-run --pro --repo /path/to/repo --project my-review --question "bug と security を見て"
 ```
 
+Path A の ChatGPT ツール利用方針は既定で `auto`。
+`auto` は UI 上の Auto ボタン名ではなく、この skill の方針名。
+Web Search は ChatGPT 側の自動判断に任せる。
+Deep Research は `on`、または `auto` でレビュー観点から複数ソース調査が必要と判定した時に、Nodriver が送信前に `/Deepresearch` または tools menu から UI/mode 選択を試す。
+明示したい時だけ次を付ける。
+
+```bash
+pro-review-run --pro --repo /path/to/repo --project my-review \
+  --web-search on \
+  --deep-research off \
+  --question "最新ライブラリ仕様も踏まえて review"
+```
+
+- `--web-search auto|on|off`
+- `--deep-research auto|on|off`
+
+`auto` は、現在情報・外部仕様・CVE・競合比較などが必要な時だけ使う方針。
+`on` は使用を依頼し、使えない surface では status / STOP_REASON を返す方針。
+`off` は外部検索を使わず、必要な論点を `要確認` に寄せる方針。
+
 Path B:
 
 ```bash

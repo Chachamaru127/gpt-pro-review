@@ -24,10 +24,13 @@ cat > "$FIXTURE" <<'EOF'
 </div>
 EOF
 PROJ="entry-pro-$$"
-OUT=$("$RUN" --pro --repo "$REPO" --project "$PROJ" --question "find bugs" --fixture-html "$FIXTURE")
+OUT=$("$RUN" --pro --repo "$REPO" --project "$PROJ" --question "find bugs" --fixture-html "$FIXTURE" --web-search off --deep-research on)
 assert_exit_ok "$?" "T1 --pro exit"
 assert_contains "$OUT" "report_saved:" "T1 --pro report saved"
 assert_contains "$OUT" "run_id:" "T1 --pro run id"
+REQ=$(printf '%s\n' "$OUT" | awk '/^request_file:/{print $2; exit}')
+assert_contains "$(cat "$REQ")" 'web_search: `off`' "T1 --pro web search forwarded"
+assert_contains "$(cat "$REQ")" 'deep_research: `on`' "T1 --pro deep research forwarded"
 
 PROJ2="entry-thinking-$$"
 OUT2=$("$RUN" --thinking --repo "$REPO" --project "$PROJ2" --question "find bugs")
@@ -46,7 +49,15 @@ set -e
 assert_exit_nonzero "$RC" "T3 missing mode rejected"
 assert_contains "$ERR" "--pro or --thinking" "T3 mode guidance"
 
+set +e
+ERR=$("$RUN" --thinking --repo "$REPO" --project "entry-thinking-policy-$$" --web-search on 2>&1 >/dev/null)
+RC=$?
+set -e
+assert_exit_nonzero "$RC" "T4 thinking rejects Path A tool policy"
+assert_contains "$ERR" "Path A (--pro) options" "T4 thinking policy guidance"
+
 cleanup_paths "$REPO" "$HOME/.pro-review/inbox/$PROJ" "$HOME/.pro-review/reports/$PROJ" "$HOME/.pro-review/workspace/$PROJ" \
-  "$HOME/.pro-review/inbox/$PROJ2" "$HOME/.pro-review/workspace/$PROJ2"
+  "$HOME/.pro-review/inbox/$PROJ2" "$HOME/.pro-review/workspace/$PROJ2" \
+  "$HOME/.pro-review/inbox/entry-thinking-policy-$$" "$HOME/.pro-review/workspace/entry-thinking-policy-$$"
 
 echo "[test-run-entry] PASS"

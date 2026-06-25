@@ -34,13 +34,16 @@ cat > "$FIXTURE" <<EOF
 </div>
 EOF
 
-OUT=$("$RUN" "$REPO" "$PROJECT" --question "find bugs" --fixture-html "$FIXTURE")
+OUT=$("$RUN" "$REPO" "$PROJECT" --question "find bugs" --fixture-html "$FIXTURE" --web-search on --deep-research off)
 assert_exit_ok "$?" "T2 browser-run success"
 assert_contains "$OUT" "saved:" "T2 save-reply ran"
 assert_contains "$OUT" "REPLY:" "T2 watch ran"
 assert_contains "$OUT" "report_saved:" "T2 finish ran"
 REPORT=$(printf '%s\n' "$OUT" | awk '/^report_saved:/{print $2; exit}')
 assert_file_exists "$REPORT" "T2 report exists"
+REQ=$(printf '%s\n' "$OUT" | awk '/^request_file:/{print $2; exit}')
+assert_contains "$(cat "$REQ")" 'web_search: `on`' "T2 request web search on"
+assert_contains "$(cat "$REQ")" 'deep_research: `off`' "T2 request deep research off"
 
 RUN_ID=$(printf '%s\n' "$OUT" | awk '/^run_id:/{print $2; exit}')
 assert_contains "$(cat "$REPORT")" "[[DONE-$RUN_ID]]" "T2 report marker"

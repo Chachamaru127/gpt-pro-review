@@ -311,3 +311,30 @@ closeout:      6.17 ↔ 6.18 → 6.19
 新しいセッションの起動コマンド: `claude`
 起動後の最初の入力: `/harness-work 6.17 6.18`
 向いている場面: 実装・fixture・docs gate は完了済み。次は実 ChatGPT のログイン / Tunnel / `save_report` を通す live e2e を行い、`HANDOFF.md` を final closeout に更新する。
+
+---
+
+# Phase 7: Pro Path A Search / Deep Research policy（2026-06-25）
+
+## Context
+
+ユーザー要件: Pro 版（Path A）で Web Search の ON/OFF と Deep Research 活用を制御できるようにする。
+既定は LLM/ChatGPT 側が使うかどうか判断し、必要時は CLI で明示できる。
+
+## Spec delta
+
+- path: `docs/spec/00-project-spec.md`
+- change: Path A request に `web_search` / `deep_research` policy を持たせる。既定は `auto`。`on` / `off` で明示可能。Deep Research は `on` または必要判定時に Nodriver が送信前に `/Deepresearch` または tools menu から UI/mode 選択を試す。
+- why: ChatGPT Search は素早い最新情報確認、Deep Research は複数ソース横断の重い調査向けであり、通常の repo-local review に常時強制すると遅く不安定になるため。既定は ChatGPT 判断にし、ユーザーが明示できる escape hatch を用意する。
+
+## team_validation_mode
+
+`manual-pass` — Product / Architecture / Security / QA / Skeptic の観点を単独で分けて評価。
+
+## Tasks
+
+| Task | 内容 | DoD | Depends | Status |
+|------|------|-----|---------|--------|
+| 7.1 | [lane:gate][tdd:required] Path A packet に `web_search` / `deep_research` policy block を追加し、default `auto` と明示 `on/off` を support する | `build-review-packet` / `pro-review-browser-embed` / `pro-review-browser-run` / `pro-review-run --pro` で policy が request_file に入り、fixture test が PASS | 6.16 | cc:完了 |
+| 7.2 | [lane:fast][tdd:skip:docs-only] SKILL / README / usage / spec に Search / Deep Research policy を同期する | docs-sync test が policy 文言を確認し、`bash tests/run-all.sh` が PASS | 7.1 | cc:完了 |
+| 7.3 | [lane:gate][tdd:required] Deep Research `on` または auto 必要判定時に、Path A live の Nodriver が送信前に `/Deepresearch` または tools menu で UI/mode 選択を試す | `pro-review-browser-run` が `deep_research` を `pro-review-browser-drive` へ渡し、drive 側の policy 判定 fixture test が PASS。選択できない場合は通常送信せず fallback する | 7.1 | cc:完了 |

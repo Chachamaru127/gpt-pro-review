@@ -15,7 +15,20 @@ import os
 import re
 import sys
 import time
+from collections.abc import Mapping
 from html.parser import HTMLParser
+
+TOOL_POLICY_CHOICES = ("auto", "on", "off")
+
+DEEP_RESEARCH_NEED_PATTERNS = [
+    ("explicit-deep-research", re.compile(r"\bdeep\s*research\b|deepresearch|ディープリサーチ", re.I)),
+    ("multi-source", re.compile(r"複数ソース|横断|multi[- ]?source", re.I)),
+    ("research", re.compile(r"調査|リサーチ|\bresearch\b", re.I)),
+    ("current-external", re.compile(r"最新|現在|外部|公式\s*(doc|docs|document|ドキュメント)|仕様|release notes?", re.I)),
+    ("security-advisory", re.compile(r"\bCVE\b|脆弱性|advisory|security bulletin", re.I)),
+    ("market-compare", re.compile(r"競合|比較|benchmark|market|ベストプラクティス|best practices?", re.I)),
+    ("legal-regulatory", re.compile(r"法務|規制|regulat|compliance", re.I)),
+]
 
 
 class AssistantParser(HTMLParser):
@@ -75,6 +88,46 @@ def validate_reply(text, run_id):
     if text.count(marker) != 1:
         raise ValueError("DONE marker must appear exactly once on the final line")
     return text
+
+
+def markdown_section(text, heading):
+    pattern = re.compile(
+        rf"(?ms)^##\s+{re.escape(heading)}\s*$\n?(.*?)(?=^##\s+|\Z)"
+    )
+    match = pattern.search(text)
+    return match.group(1).strip() if match else ""
+
+
+def parse_deep_research_policy(request_text):
+    match = re.search(
+        r"(?mi)^\s*-\s*deep_research:\s*`?(auto|on|off)`?\s*$",
+        request_text,
+    )
+    return match.group(1).lower() if match else "auto"
+
+
+def infer_deep_research_needed(request_text):
+    review_question = markdown_section(request_text, "レビュー観点")
+    if not review_question:
+        return False, "no review question"
+    hits = []
+    for name, pattern in DEEP_RESEARCH_NEED_PATTERNS:
+        if pattern.search(review_question):
+            hits.append(name)
+    if hits:
+        return True, ",".join(hits[:3])
+    return False, "no research signal"
+
+
+def decide_deep_research_selection(policy, request_text):
+    if policy == "on":
+        return True, "explicit on"
+    if policy == "off":
+        return False, "explicit off"
+    needed, reason = infer_deep_research_needed(request_text)
+    if needed:
+        return True, f"auto:{reason}"
+    return False, f"auto:{reason}"
 
 
 def extract_from_html(path, run_id):
@@ -141,6 +194,206 @@ def ensure_live_python():
 
 async def js(page, expression):
     return await page.evaluate(expression, await_promise=True, return_by_value=True)
+
+
+def js_object(result):
+    if isinstance(result, Mapping):
+        return dict(result)
+    if isinstance(result, str):
+        try:
+            parsed = json.loads(result)
+        except json.JSONDecodeError:
+            return None
+        return dict(parsed) if isinstance(parsed, Mapping) else None
+    value = getattr(result, "value", None)
+    if isinstance(value, Mapping):
+        return dict(value)
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return None
+        return dict(parsed) if isinstance(parsed, Mapping) else None
+    deep_value = getattr(getattr(result, "deep_serialized_value", None), "value", None)
+    if isinstance(deep_value, list):
+        obj = {}
+        for item in deep_value:
+            if not isinstance(item, list) or len(item) != 2:
+                continue
+            key, desc = item
+            if isinstance(desc, Mapping) and "value" in desc:
+                obj[str(key)] = desc.get("value")
+        if obj:
+            return obj
+    return None
+
+
+async def clear_prompt(page):
+    script = """
+(() => {
+  const selectors = [
+    '#prompt-textarea',
+    'textarea',
+    "div[contenteditable='true']",
+    "[data-testid='composer-text-input']",
+    '.ProseMirror'
+  ];
+  const el = selectors.map(s => document.querySelector(s)).find(Boolean);
+  if (!el) return false;
+  el.focus();
+  if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
+    el.value = '';
+  } else {
+    el.textContent = '';
+  }
+  el.dispatchEvent(new InputEvent('input', {
+    bubbles: true,
+    cancelable: true,
+    inputType: 'deleteContentBackward',
+    data: null
+  }));
+  el.dispatchEvent(new Event('change', { bubbles: true }));
+  return true;
+})()
+"""
+    return await js(page, script)
+
+
+async def click_deep_research_candidate(page):
+    script = """
+(() => {
+  const norm = (s) => String(s || '').replace(/\\s+/g, ' ').trim();
+  const visible = (el) => {
+    const style = window.getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return style.display !== 'none' && style.visibility !== 'hidden' &&
+      rect.width > 0 && rect.height > 0;
+  };
+  const disabled = (el) =>
+    el.disabled || el.getAttribute('aria-disabled') === 'true' ||
+    el.getAttribute('data-disabled') === 'true';
+  const labelOf = (el) => norm([
+    el.getAttribute('aria-label'),
+    el.getAttribute('data-testid'),
+    el.getAttribute('title'),
+    el.getAttribute('role'),
+    el.textContent
+  ].filter(Boolean).join(' '));
+  const deep = /(deep\\s*research|deepresearch|ディープ\\s*リサーチ|詳細.*リサーチ|深い.*調査|高度な.*調査)/i;
+  const elements = [
+    ...document.querySelectorAll('button,[role="button"],[role="menuitem"],[role="option"],[cmdk-item],a')
+  ];
+  for (const el of elements) {
+    const label = labelOf(el);
+    if (label && deep.test(label) && visible(el) && !disabled(el)) {
+      el.click();
+      return { ok: true, label: label.slice(0, 160) };
+    }
+  }
+  return { ok: false, reason: 'deep research item not found' };
+})()
+"""
+    result = await js(page, script)
+    return js_object(result) or {
+        "ok": False,
+        "reason": f"invalid click result ({type(result).__name__})",
+    }
+
+
+async def click_tools_menu_candidate(page):
+    script = """
+(() => {
+  const norm = (s) => String(s || '').replace(/\\s+/g, ' ').trim();
+  const visible = (el) => {
+    const style = window.getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return style.display !== 'none' && style.visibility !== 'hidden' &&
+      rect.width > 0 && rect.height > 0;
+  };
+  const disabled = (el) =>
+    el.disabled || el.getAttribute('aria-disabled') === 'true' ||
+    el.getAttribute('data-disabled') === 'true';
+  const labelOf = (el) => norm([
+    el.getAttribute('aria-label'),
+    el.getAttribute('data-testid'),
+    el.getAttribute('title'),
+    el.textContent
+  ].filter(Boolean).join(' '));
+  const score = (el) => {
+    const label = labelOf(el).toLowerCase();
+    if (!label || !visible(el) || disabled(el)) return 0;
+    if (/\\btools?\\b|ツール/.test(label)) return 5;
+    if (/composer.*plus|plus.*composer|add.*tools?/.test(label)) return 4;
+    if (/添付|attach|add|追加|\\+/.test(label)) return 2;
+    return 0;
+  };
+  const buttons = [...document.querySelectorAll('button,[role="button"]')]
+    .map((el) => ({ el, score: score(el), label: labelOf(el) }))
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score);
+  if (!buttons.length) return { ok: false, reason: 'tools menu not found' };
+  buttons[0].el.click();
+  return { ok: true, label: buttons[0].label.slice(0, 160) };
+})()
+"""
+    result = await js(page, script)
+    return js_object(result) or {
+        "ok": False,
+        "reason": f"invalid tools result ({type(result).__name__})",
+    }
+
+
+async def select_deep_research_via_slash(page, timeout):
+    _, editor = await wait_for_chat_input(page, min(timeout, 10))
+    if not editor:
+        return False, "composer not found"
+    attempts = []
+    for command in ("/Deepresearch", "/Deep Research"):
+        await clear_prompt(page)
+        try:
+            await editor.click()
+            await editor.send_keys(command)
+        except Exception as exc:
+            attempts.append(f"{command}:send_keys:{exc}")
+            continue
+        await page.sleep(1)
+        clicked = await click_deep_research_candidate(page)
+        await page.sleep(0.5)
+        if clicked.get("ok"):
+            return True, f"slash:{clicked.get('label', command)}"
+        await clear_prompt(page)
+        attempts.append(f"{command}:{clicked.get('reason', 'not found')}")
+    return False, "; ".join(attempts)
+
+
+async def select_deep_research_via_tools_menu(page):
+    first = await click_deep_research_candidate(page)
+    if first.get("ok"):
+        return True, f"visible:{first.get('label', '')}"
+    opened = await click_tools_menu_candidate(page)
+    if not opened.get("ok"):
+        await clear_prompt(page)
+        return False, opened.get("reason", "tools menu not found")
+    await page.sleep(0.8)
+    second = await click_deep_research_candidate(page)
+    await page.sleep(0.3)
+    if second.get("ok"):
+        return True, f"tools:{second.get('label', '')}"
+    await clear_prompt(page)
+    return False, f"tools opened ({opened.get('label', '')}); {second.get('reason', 'item not found')}"
+
+
+async def select_deep_research_mode(page, timeout):
+    attempts = []
+    ok, detail = await select_deep_research_via_slash(page, timeout)
+    if ok:
+        return True, detail
+    attempts.append(f"slash={detail}")
+    ok, detail = await select_deep_research_via_tools_menu(page)
+    if ok:
+        return True, detail
+    attempts.append(f"tools={detail}")
+    return False, " | ".join(attempts)
 
 
 async def wait_for_chat_input(page, timeout):
@@ -308,6 +561,25 @@ async def drive_live(args):
             if parser.login_required:
                 return fallback("login required")
             return fallback("composer not found")
+        policy = args.deep_research
+        if policy == "auto":
+            policy = parse_deep_research_policy(request_text)
+        select_deep_research, decision_reason = decide_deep_research_selection(policy, request_text)
+        if select_deep_research:
+            selected, detail = await select_deep_research_mode(page, min(args.timeout, 30))
+            if not selected:
+                sys.stderr.write(
+                    "[pro-review-browser-drive] deep research selection failed: "
+                    f"{decision_reason}; {detail}\n"
+                )
+                return fallback("deep research unavailable")
+            sys.stderr.write(
+                "[pro-review-browser-drive] deep research selected: "
+                f"{decision_reason}; {detail}\n"
+            )
+            selector, editor = await wait_for_chat_input(page, min(args.timeout, 30))
+            if not editor:
+                return fallback("composer not found after deep research selection")
         result = await fill_prompt(page, request_text)
         if not isinstance(result, dict) or not result.get("ok"):
             await editor.click()
@@ -335,6 +607,8 @@ def main():
     ap.add_argument("--fixture-html", help="static HTML fixture to parse instead of live browser")
     ap.add_argument("--run-id", required=True, help="expected run id for [[DONE-<run_id>]]")
     ap.add_argument("--request-file", help="request markdown to send in live mode")
+    ap.add_argument("--deep-research", choices=TOOL_POLICY_CHOICES, default="auto",
+                    help="select Deep Research in ChatGPT UI before sending: auto|on|off")
     ap.add_argument("--timeout", type=float, default=120.0)
     args = ap.parse_args()
 
