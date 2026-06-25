@@ -15,9 +15,17 @@ assert_file_exists "$ROOT/docs/usage.md" "T1 usage exists"
 assert_file_exists "$ROOT/docs/manual-checklist.md" "T1 manual checklist exists"
 
 SKILL=$(cat "$ROOT/SKILL.md")
+README=$(cat "$ROOT/README.md")
 USAGE=$(cat "$ROOT/docs/usage.md")
 SETUP=$(cat "$ROOT/SETUP-layer2.md")
 SPEC=$(cat "$ROOT/docs/spec/00-project-spec.md")
+
+assert_contains "$README" "## ひとことで" "T1 README one-line overview"
+assert_contains "$README" "## 導入" "T1 README setup"
+assert_contains "$README" "## Path A 使い方" "T1 README Path A usage"
+assert_contains "$README" "## Path B 使い方" "T1 README Path B usage"
+assert_contains "$README" "Secure MCP Tunnel" "T1 README tunnel concept"
+assert_contains "$README" "Deep research" "T1 README deep research plus menu"
 
 assert_contains "$SKILL" "pro-review-run --pro" "T2 SKILL Path A command"
 assert_contains "$SKILL" "pro-review-run --thinking" "T2 SKILL Path B command"
