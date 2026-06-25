@@ -74,3 +74,15 @@
 - reply path: none
 - report bundle: none
 - unresolved: dedicated ChatGPT UI did not expose Deep Research via `/Deepresearch` slash suggestions or the opened `composer-plus-btn` menu. Driver failed closed before sending the review request.
+
+## Latest smoke: Path A Deep Research plus menu selection (2026-06-26 JST)
+
+- repo: `/Users/tachibanashuuta/LocalWork/Code/gpt-pro-review`
+- command: Nodriver diagnostic importing `scripts/pro-review-browser-drive`, opening `https://chatgpt.com/`, and calling `select_deep_research_via_tools_menu(page)`
+- browser profile: `/Users/tachibanashuuta/.pro-review/browser/profile`
+- login setup: marker present; `pro-review-doctor` reported `OK nodriver venv module importable`
+- result: `RESULT ok`
+- detail: `tools:Deep research`
+- reply path: none
+- report bundle: none
+- unresolved: none for UI selection; this smoke intentionally did not send a review prompt.

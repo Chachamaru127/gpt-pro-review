@@ -272,6 +272,9 @@ async def click_deep_research_candidate(page):
   const disabled = (el) =>
     el.disabled || el.getAttribute('aria-disabled') === 'true' ||
     el.getAttribute('data-disabled') === 'true';
+  const composer = (el) =>
+    el.matches('textarea,input,#prompt-textarea,.ProseMirror,[role="textbox"],[contenteditable="true"]') ||
+    Boolean(el.closest('textarea,input,#prompt-textarea,.ProseMirror,[role="textbox"],[contenteditable="true"]'));
   const labelOf = (el) => norm([
     el.getAttribute('aria-label'),
     el.getAttribute('data-testid'),
@@ -279,15 +282,25 @@ async def click_deep_research_candidate(page):
     el.getAttribute('role'),
     el.textContent
   ].filter(Boolean).join(' '));
-  const deep = /(deep\\s*research|deepresearch|ディープ\\s*リサーチ|詳細.*リサーチ|深い.*調査|高度な.*調査)/i;
+  const deep = /(deep\\s*resear?ch|deepresearch|deepreseach|ディープ\\s*リサーチ|詳細.*リサーチ|深い.*調査|高度な.*調査)/i;
   const elements = [
-    ...document.querySelectorAll('button,[role="button"],[role="menuitem"],[role="option"],[cmdk-item],a')
+    ...document.querySelectorAll('button,[role="button"],[role="menuitem"],[role="option"],[cmdk-item],a,[data-testid],[aria-label],span,div')
   ];
-  for (const el of elements) {
-    const label = labelOf(el);
-    if (label && deep.test(label) && visible(el) && !disabled(el)) {
-      el.click();
-      return { ok: true, label: label.slice(0, 160) };
+  const matches = elements
+    .map((el) => ({
+      el,
+      label: labelOf(el),
+      target: el.closest('button,[role="button"],[role="menuitem"],[role="option"],[cmdk-item],a,[data-testid]') || el
+    }))
+    .filter((item) => item.label && deep.test(item.label) && visible(item.el) && visible(item.target) && !disabled(item.target))
+    .filter((item) => !composer(item.el) && !composer(item.target))
+    .sort((a, b) => a.label.length - b.label.length);
+  for (const item of matches) {
+    try {
+      item.target.click();
+      return { ok: true, label: item.label.slice(0, 160) };
+    } catch (_) {
+      continue;
     }
   }
   return { ok: false, reason: 'deep research item not found' };
@@ -322,6 +335,8 @@ async def click_tools_menu_candidate(page):
   const score = (el) => {
     const label = labelOf(el).toLowerCase();
     if (!label || !visible(el) || disabled(el)) return 0;
+    if (el.id === 'composer-plus-btn' || el.getAttribute('data-testid') === 'composer-plus-btn') return 8;
+    if (/ファイルなどを追加/.test(label)) return 7;
     if (/\\btools?\\b|ツール/.test(label)) return 5;
     if (/composer.*plus|plus.*composer|add.*tools?/.test(label)) return 4;
     if (/添付|attach|add|追加|\\+/.test(label)) return 2;
@@ -367,6 +382,7 @@ async def select_deep_research_via_slash(page, timeout):
 
 
 async def select_deep_research_via_tools_menu(page):
+    await clear_prompt(page)
     first = await click_deep_research_candidate(page)
     if first.get("ok"):
         return True, f"visible:{first.get('label', '')}"

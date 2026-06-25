@@ -169,6 +169,9 @@ remote = Obj()
 remote.deep_serialized_value = Obj()
 remote.deep_serialized_value.value = [["ok", {"type": "boolean", "value": True}], ["label", {"type": "string", "value": "Deep Research"}]]
 assert mod.js_object(remote) == {"ok": True, "label": "Deep Research"}
+src = open(sys.argv[1], encoding="utf-8").read()
+assert "deepreseach" in src
+assert "composer-plus-btn" in src
 PY
 assert_exit_ok "$?" "T9 deep research policy decision"
 
