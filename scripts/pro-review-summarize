@@ -1,0 +1,296 @@
+#!/usr/bin/env python3
+"""Summarize a pro-review reply into action buckets.
+
+Output:
+- JSON summary
+- optional Markdown summary via --markdown-out
+"""
+import argparse
+import json
+import os
+import re
+import sys
+import tempfile
+
+FINDING_RE = re.compile(
+    r"^\[(?P<severity>高|中|低|high|medium|low)\]\s*"
+    r"(?P<file>[^:\s]+):(?P<line>\d+)(?:-\d+)?\s*[—:-]\s*(?P<title>.+)$",
+    re.I,
+)
+JP_SEVERITY_RE = re.compile(
+    r"^(?:[-*]\s*)?重大度\s*[:：]\s*(?P<severity>高|中|低|high|medium|low)"
+    r"\s*[—:-]\s*(?P<title>.+)$",
+    re.I,
+)
+INLINE_LOCATION_RE = re.compile(
+    r"(?:該当箇所|場所|location)\s*[:：]\s*"
+    r"(?P<file>[^:\s。]+):(?P<line>\d+)(?:-\d+)?",
+    re.I,
+)
+SEVERITY_ONLY_RE = re.compile(r"^\[(?P<severity>高|中|低|high|medium|low)\]$", re.I)
+FILE_LINE_RE = re.compile(
+    r"^(?P<file>[^:\s]+):(?P<line>\d+)(?:-\d+)?(?:\s*[—:-]\s*(?P<title>.*))?$"
+)
+FILE_ONLY_RE = re.compile(r"^(?P<file>[\w./-]+)$")
+SPLIT_LINE_RE = re.compile(r"^:(?P<line>\d+)(?:-\d+)?\s*[—:-]\s*(?P<title>.*)$")
+RECOMMEND_RE = re.compile(r"^(?:推奨修正|recommendation)\s*[:：]\s*(?P<text>.*)$", re.I)
+
+
+def normalize_severity(severity):
+    lowered = severity.lower()
+    if lowered == "high":
+        return "高"
+    if lowered == "medium":
+        return "中"
+    if lowered == "low":
+        return "低"
+    return severity
+
+
+def classify(severity, title, recommendation):
+    hay = f"{severity} {title} {recommendation}".lower()
+    if "要確認" in hay or "needs confirmation" in hay or "確認" in hay:
+        return "要確認"
+    if normalize_severity(severity) in ("高", "中"):
+        return "対応"
+    return "見送り"
+
+
+def parse_reply(text):
+    findings = []
+    current = None
+    pending_severity = None
+    pending_file = None
+    title_parts = []
+    recommendation_parts = []
+    collecting_recommendation = False
+    in_fence = False
+
+    def flush_title():
+        if current is not None and title_parts:
+            extra = " ".join(
+                part.strip() for part in title_parts if part.strip() and part.strip() != "—"
+            ).strip()
+            if extra:
+                current["title"] = f"{current['title']} {extra}".strip()
+            title_parts.clear()
+
+    def flush_recommendation():
+        if current is not None and recommendation_parts:
+            current["recommendation"] = " ".join(
+                part.strip() for part in recommendation_parts if part.strip()
+            ).strip()
+            recommendation_parts.clear()
+
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if line.startswith("[[DONE-") and not in_fence:
+            flush_title()
+            flush_recommendation()
+            continue
+        if in_fence:
+            if collecting_recommendation and current is not None:
+                recommendation_parts.append(line)
+            elif current is not None:
+                title_parts.append(line)
+            if line.startswith("```"):
+                in_fence = False
+            continue
+        if line.startswith("```"):
+            if collecting_recommendation and current is not None:
+                recommendation_parts.append(line)
+            elif current is not None:
+                title_parts.append(line)
+            in_fence = True
+            continue
+        m = FINDING_RE.match(line)
+        if m:
+            flush_title()
+            flush_recommendation()
+            collecting_recommendation = False
+            current = {
+                "severity": normalize_severity(m.group("severity")),
+                "file": m.group("file"),
+                "line": int(m.group("line")),
+                "title": m.group("title").strip(),
+                "recommendation": "",
+                "decision": "",
+            }
+            findings.append(current)
+            pending_severity = None
+            pending_file = None
+            continue
+        jm = JP_SEVERITY_RE.match(line)
+        if jm:
+            loc = INLINE_LOCATION_RE.search(jm.group("title"))
+            if loc:
+                flush_title()
+                flush_recommendation()
+                collecting_recommendation = False
+                title = INLINE_LOCATION_RE.sub("", jm.group("title")).strip()
+                title = title.rstrip("。 .")
+                current = {
+                    "severity": normalize_severity(jm.group("severity")),
+                    "file": loc.group("file"),
+                    "line": int(loc.group("line")),
+                    "title": title,
+                    "recommendation": "",
+                    "decision": "",
+                }
+                findings.append(current)
+                pending_severity = None
+                pending_file = None
+                continue
+        sm = SEVERITY_ONLY_RE.match(line)
+        if sm:
+            flush_title()
+            flush_recommendation()
+            collecting_recommendation = False
+            pending_severity = normalize_severity(sm.group("severity"))
+            pending_file = None
+            current = None
+            continue
+        fm = FILE_LINE_RE.match(line)
+        if fm and pending_severity:
+            flush_recommendation()
+            collecting_recommendation = False
+            current = {
+                "severity": pending_severity,
+                "file": fm.group("file"),
+                "line": int(fm.group("line")),
+                "title": (fm.group("title") or "").strip(),
+                "recommendation": "",
+                "decision": "",
+            }
+            findings.append(current)
+            pending_severity = None
+            pending_file = None
+            title_parts = []
+            continue
+        split = SPLIT_LINE_RE.match(line)
+        if split and pending_severity and pending_file:
+            current = {
+                "severity": pending_severity,
+                "file": pending_file,
+                "line": int(split.group("line")),
+                "title": (split.group("title") or "").strip(),
+                "recommendation": "",
+                "decision": "",
+            }
+            findings.append(current)
+            pending_severity = None
+            pending_file = None
+            title_parts = []
+            collecting_recommendation = False
+            continue
+        if pending_severity and current is None:
+            if pending_file:
+                pending_severity = None
+                pending_file = None
+                continue
+            file_only = FILE_ONLY_RE.match(line)
+            file_candidate = file_only.group("file") if file_only else ""
+            if file_candidate and ("." in file_candidate or "/" in file_candidate):
+                pending_file = file_only.group("file")
+                continue
+            pending_severity = None
+            pending_file = None
+            continue
+        rm = RECOMMEND_RE.match(line)
+        if rm and current is not None:
+            flush_title()
+            flush_recommendation()
+            text = rm.group("text").strip()
+            if text:
+                recommendation_parts.append(text)
+                collecting_recommendation = True
+                if text.startswith("```"):
+                    in_fence = True
+            else:
+                current["recommendation"] = ""
+                collecting_recommendation = True
+            continue
+        if collecting_recommendation and current is not None:
+            recommendation_parts.append(line)
+            continue
+        if current is not None:
+            title_parts.append(line)
+    flush_title()
+    flush_recommendation()
+    for finding in findings:
+        finding["decision"] = classify(
+            finding["severity"], finding["title"], finding["recommendation"]
+        )
+    return findings
+
+
+def write_text_0600(path, text):
+    directory = os.path.dirname(os.path.abspath(path)) or "."
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(prefix=".tmp.", suffix=".out", dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(tmp_path, 0o600)
+        os.replace(tmp_path, path)
+        os.chmod(path, 0o600)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+def render_markdown(summary):
+    lines = ["# pro-review summary", ""]
+    lines.append(f"- total: {summary['total']}")
+    for key in ("対応", "要確認", "見送り"):
+        lines.append(f"- {key}: {summary['counts'].get(key, 0)}")
+    lines.append("")
+    for finding in summary["findings"]:
+        lines.append(
+            f"## {finding['decision']} / {finding['severity']} / "
+            f"{finding['file']}:{finding['line']}"
+        )
+        lines.append(finding["title"])
+        if finding["recommendation"]:
+            lines.append("")
+            lines.append(f"推奨修正: {finding['recommendation']}")
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Summarize a pro-review reply.")
+    ap.add_argument("reply_path")
+    ap.add_argument("--json-out")
+    ap.add_argument("--markdown-out")
+    args = ap.parse_args()
+
+    with open(args.reply_path, "rb") as f:
+        text = f.read().decode("utf-8", errors="replace")
+    findings = parse_reply(text)
+    counts = {}
+    for finding in findings:
+        counts[finding["decision"]] = counts.get(finding["decision"], 0) + 1
+    summary = {
+        "reply_path": os.path.abspath(args.reply_path),
+        "total": len(findings),
+        "counts": counts,
+        "findings": findings,
+    }
+    payload = json.dumps(summary, ensure_ascii=False, indent=2)
+    if args.json_out:
+        write_text_0600(args.json_out, payload + "\n")
+    if args.markdown_out:
+        write_text_0600(args.markdown_out, render_markdown(summary))
+    print(payload)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

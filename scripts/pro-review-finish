@@ -3,8 +3,9 @@
 # 「使っている間だけ・そのプロジェクトだけ」露出する設計の締め。
 #
 # 使い方: pro-review-finish <project> [reply-path]
-#   reply-path 省略時は inbox/<project> の最新返信(.md/.txt)を採用。
+#   reply-path 省略時は inbox/<project> の最新の正規 REPLY-*.md を採用。
 set -euo pipefail
+umask 077
 
 PROJECT="${1:?usage: pro-review-finish <project> [reply-path]}"
 REPLY="${2:-}"
@@ -14,7 +15,12 @@ fi
 BASE="$HOME/.pro-review"
 INBOX="$BASE/inbox/$PROJECT"
 REPORTS="$BASE/reports/$PROJECT"
+mkdir -p "$BASE"
+chmod 700 "$BASE" 2>/dev/null || true
 mkdir -p "$REPORTS"
+chmod 700 "$REPORTS" 2>/dev/null || true
+VALIDATOR="$(cd "$(dirname "$0")" && pwd -P)/pro-review-validate-reply"
+SUMMARIZER="$(cd "$(dirname "$0")" && pwd -P)/pro-review-summarize"
 
 # 露出を閉じる（成功/失敗どちらでも必ず実行）
 close_access() {
@@ -23,13 +29,21 @@ close_access() {
   echo "[closed] アクセス遮断: デーモン停止 + active-project 解除" >&2
 }
 
-# reply 未指定なら inbox の最新 .md/.txt を採用（symlink は辿らない）
+# reply 未指定なら inbox の最新 valid REPLY-*.md を採用（symlink は辿らない）
 if [ -z "$REPLY" ]; then
-  REPLY=$(find "$INBOX" -maxdepth 1 -type f \( -name '*.md' -o -name '*.txt' \) -print0 2>/dev/null \
-            | xargs -0 ls -t 2>/dev/null | head -1 || true)
+  while IFS= read -r cand; do
+    if "$VALIDATOR" "$INBOX" "$cand" --quiet 2>/dev/null; then
+      REPLY="$cand"
+      break
+    fi
+  done < <(find "$INBOX" -maxdepth 1 -type f -name 'REPLY-*.md' -print0 2>/dev/null \
+            | xargs -0 ls -t 2>/dev/null || true)
 fi
 
-if [ -n "$REPLY" ] && [ -f "$REPLY" ] && [ ! -L "$REPLY" ]; then
+if [ -n "$REPLY" ] && "$VALIDATOR" "$INBOX" "$REPLY" --quiet 2>/dev/null; then
+  REPLY_BASE=$(basename "$REPLY")
+  RUN_ID="${REPLY_BASE#REPLY-}"
+  RUN_ID="${RUN_ID%.md}"
   # inbox 配下に正規化されることを確認（外部入力の取り違え防止）
   RR=$(cd "$(dirname "$REPLY")" && pwd -P)/$(basename "$REPLY")
   IR=$(cd "$INBOX" && pwd -P)
@@ -39,7 +53,61 @@ if [ -n "$REPLY" ] && [ -f "$REPLY" ] && [ ! -L "$REPLY" ]; then
   TS=$(date +%Y%m%d-%H%M%S)
   DEST="$REPORTS/$TS-$(basename "$REPLY")"
   cp "$REPLY" "$DEST"
+  chmod 600 "$DEST" 2>/dev/null || true
+  BUNDLE="$REPORTS/$RUN_ID"
+  mkdir -p "$BUNDLE"
+  chmod 700 "$BUNDLE" 2>/dev/null || true
+  cp "$REPLY" "$BUNDLE/reply.md"
+  chmod 600 "$BUNDLE/reply.md" 2>/dev/null || true
+  REQUEST_FOUND=false
+  REQUEST_SRC=$(find "$BASE/outbox" -maxdepth 1 -type f -name "*$RUN_ID*.md" -print -quit 2>/dev/null || true)
+  if [ -n "$REQUEST_SRC" ]; then
+    cp "$REQUEST_SRC" "$BUNDLE/request.md"
+    chmod 600 "$BUNDLE/request.md" 2>/dev/null || true
+    REQUEST_FOUND=true
+  fi
+  if [ -x "$SUMMARIZER" ]; then
+    SUMMARY_JSON="$REPORTS/$TS-summary.json"
+    SUMMARY_MD="$REPORTS/$TS-summary.md"
+    "$SUMMARIZER" "$DEST" --json-out "$SUMMARY_JSON" --markdown-out "$SUMMARY_MD" >/dev/null || true
+    "$SUMMARIZER" "$BUNDLE/reply.md" --json-out "$BUNDLE/summary.json" --markdown-out "$BUNDLE/summary.md" >/dev/null || true
+    if [ -f "$BUNDLE/summary.md" ]; then
+      {
+        echo "# easy report"
+        echo
+        cat "$BUNDLE/summary.md"
+      } > "$BUNDLE/easy-report.md"
+      chmod 600 "$BUNDLE/easy-report.md" 2>/dev/null || true
+    fi
+    [ -f "$SUMMARY_JSON" ] && echo "summary_json: $SUMMARY_JSON"
+    [ -f "$SUMMARY_MD" ] && echo "summary_markdown: $SUMMARY_MD"
+  fi
+  python3 - "$BUNDLE/metadata.json" "$PROJECT" "$RUN_ID" "$REPLY_BASE" "$REQUEST_FOUND" "$(basename "$DEST")" <<'PY'
+import json, os, sys, time
+path, project, run_id, reply_file, request_found, legacy_report_file = sys.argv[1:]
+since = os.environ.get("PRO_REVIEW_REPORT_SINCE")
+if not since and "-" in run_id:
+    since = run_id.split("-", 1)[0]
+data = {
+    "mode": os.environ.get("PRO_REVIEW_REPORT_MODE", "unknown"),
+    "project": project,
+    "since": since,
+    "run_id": run_id,
+    "request": "request.md" if request_found == "true" else None,
+    "reply": "reply.md",
+    "report": "reply.md",
+    "legacy_report_file": legacy_report_file,
+    "reply_file": reply_file,
+    "request_found": request_found == "true",
+    "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+}
+with open(path, "w", encoding="utf-8") as f:
+    json.dump(data, f, ensure_ascii=False, indent=2)
+    f.write("\n")
+PY
+  chmod 600 "$BUNDLE/metadata.json" 2>/dev/null || true
   close_access
+  echo "report_bundle: $BUNDLE"
   echo "report_saved: $DEST"
 else
   close_access

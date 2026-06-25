@@ -1,26 +1,30 @@
 #!/usr/bin/env python3
-"""ChatGPT Deep Research 互換の MCP サーバ。
+"""ChatGPT 用の pro-review MCP サーバ。
 
 なぜこれが必要か:
 - ChatGPT の **GPT-5.5 Pro は Deep Research surface** で、`search` と `fetch` の
   2ツールしか呼ばない。それ以外の MCP ツール（`read_file` 等）は見えない。
 - filesystem MCP は read_file/list_directory 等しか持たないので、Pro からは
   「ツールが見つからない」状態になる（Thinking では呼べる）。
-- そこで search/fetch だけを実装した小さな MCP を立て、active-project の
-  workspace を読み取り専用で「検索→取得」させる。
+- そこで search/fetch/save_report だけを実装した小さな MCP を立てる。
 
 公開範囲:
-- `active-project` が指す workspace のみ（読み取り、再帰）。
-- inbox は晒さない（Pro/Plus は MCP 経由で書けないので意味がない）。
+- `active-project` が指す workspace のみ（search/fetch は読み取り、再帰）。
+- `save_report` は active-project の inbox/REPLY-<run_id>.md だけに書く。
 - workspace 外パス・symlink・hidden は拒否。
 
 実装は stdio JSON-RPC（newline-delimited）。MCP プロトコル: 2025-03-26 互換。
 """
-import json, os, sys, threading
+import json, os, re, stat, sys, tempfile, threading
 
 WS_BASE   = os.path.expanduser("~/.pro-review/workspace")
+INBOX_BASE = os.path.expanduser("~/.pro-review/inbox")
 ACTIVE    = os.path.expanduser("~/.pro-review/active-project")
 NO_PROJ   = os.path.expanduser("~/.pro-review/_no-project")
+PROJECT_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+RUN_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+SAVE_REPORT_MAX_BYTES = int(os.environ.get("PRO_REVIEW_SAVE_REPORT_MAX_BYTES", "1048576"))
+READONLY = os.environ.get("PRO_REVIEW_READONLY", "") == "1"
 
 # active-project の解決
 P = ""
@@ -29,9 +33,14 @@ try:
         P = f.read().strip()
 except OSError:
     pass
+if P and (not PROJECT_RE.match(P) or P in (".", "..") or P.startswith(("-", "."))):
+    P = ""
 WS = f"{WS_BASE}/{P}" if P else NO_PROJ
+INBOX = f"{INBOX_BASE}/{P}" if P else os.path.expanduser("~/.pro-review/_no-project-inbox")
 os.makedirs(WS, exist_ok=True)
+os.makedirs(INBOX, exist_ok=True)
 WS_REAL = os.path.realpath(WS)
+INBOX_REAL = os.path.realpath(INBOX)
 
 # 同時に複数 stdin reader が走らないようロック
 write_lock = threading.Lock()
@@ -72,8 +81,34 @@ def read_text_safe(path, limit=None):
     return data.decode("utf-8", errors="replace")
 
 def make_url(rel):
-    # file:// URL（情報用。ChatGPT は fetch でしか取らない）
-    return "file://" + os.path.join(WS_REAL, rel).replace(" ", "%20")
+    return "pro-review://" + rel.replace(" ", "%20")
+
+def has_hidden_component(rel):
+    return any(part.startswith(".") for part in rel.split(os.sep) if part)
+
+def validate_project(project):
+    if not isinstance(project, str) or not project:
+        raise ValueError("project is required")
+    if not PROJECT_RE.match(project) or project in (".", "..") or project.startswith(("-", ".")):
+        raise ValueError("invalid project")
+    if not P or project != P:
+        raise ValueError("project does not match active-project")
+
+def validate_run_id(run_id):
+    if not isinstance(run_id, str) or not run_id:
+        raise ValueError("run_id is required")
+    if not RUN_ID_RE.match(run_id) or run_id in (".", "..") or run_id.startswith(("-", ".")):
+        raise ValueError("invalid run_id")
+
+def validate_body_marker(body, run_id):
+    marker = f"[[DONE-{run_id}]]"
+    lines = body.splitlines()
+    if not lines:
+        raise ValueError("body is empty")
+    if lines[-1] != marker:
+        raise ValueError(f"final line must be exactly {marker}")
+    if body.count(marker) != 1:
+        raise ValueError("DONE marker must appear exactly once on the final line")
 
 def tool_search(arguments):
     """input: {"query": str}
@@ -120,6 +155,8 @@ def tool_fetch(arguments):
     fid = arguments.get("id") or ""
     if not isinstance(fid, str) or not fid:
         raise ValueError("id is required (relative path within workspace)")
+    if os.path.isabs(fid) or has_hidden_component(fid):
+        raise ValueError("id is not allowed")
     # path traversal 防止: 絶対パスや .. を経由しても workspace 内に正規化されることを確認
     full = os.path.realpath(os.path.join(WS_REAL, fid))
     if not (full == WS_REAL or full.startswith(WS_REAL + os.sep)):
@@ -137,6 +174,66 @@ def tool_fetch(arguments):
         "text": text,
         "url": make_url(fid),
         "metadata": {"size_bytes": os.path.getsize(full)},
+    }
+
+def tool_save_report(arguments):
+    """input: {"project": str, "run_id": str, "body": str}
+    output: {"saved": true, "project", "run_id", "reply_id", "bytes"}
+    """
+    project = arguments.get("project") or ""
+    run_id = arguments.get("run_id") or ""
+    body = arguments.get("body")
+    validate_project(project)
+    validate_run_id(run_id)
+    if not isinstance(body, str) or not body:
+        raise ValueError("body is required")
+    validate_body_marker(body, run_id)
+
+    os.makedirs(INBOX_REAL, exist_ok=True)
+    try:
+        os.chmod(os.path.expanduser("~/.pro-review"), 0o700)
+        os.chmod(INBOX_REAL, 0o700)
+    except OSError:
+        pass
+
+    dest = os.path.join(INBOX_REAL, f"REPLY-{run_id}.md")
+    dest_dir = os.path.realpath(os.path.dirname(dest))
+    if not (dest_dir == INBOX_REAL or dest_dir.startswith(INBOX_REAL + os.sep)):
+        raise ValueError("destination escapes inbox")
+    if os.path.islink(dest):
+        raise ValueError("refuse to overwrite symlink")
+
+    payload = body.encode("utf-8", errors="replace")
+    if len(payload) > SAVE_REPORT_MAX_BYTES:
+        raise ValueError(f"body is too large (max {SAVE_REPORT_MAX_BYTES} bytes)")
+    tmp_fd, tmp_path = tempfile.mkstemp(prefix=".tmp.REPLY-", suffix=".md", dir=INBOX_REAL)
+    try:
+        with os.fdopen(tmp_fd, "wb") as f:
+            f.write(payload)
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(tmp_path, 0o600)
+        os.replace(tmp_path, dest)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+    try:
+        st = os.lstat(dest)
+    except OSError as e:
+        raise ValueError(f"saved reply disappeared: {e}")
+    if not stat.S_ISREG(st.st_mode):
+        raise ValueError("saved reply is not a regular file")
+
+    return {
+        "saved": True,
+        "project": project,
+        "run_id": run_id,
+        "reply_id": f"REPLY-{run_id}.md",
+        "bytes": len(payload),
     }
 
 TOOLS = [
@@ -185,7 +282,34 @@ TOOLS = [
             "openWorldHint": False,
         },
     },
+    {
+        "name": "save_report",
+        "description": (
+            "Save the final review report for the active project. The body must end with "
+            "[[DONE-<run_id>]] on its final line. This writes only to the project's inbox "
+            "as REPLY-<run_id>.md; it cannot write arbitrary files."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "project": {"type": "string", "description": "active project name"},
+                "run_id": {"type": "string", "description": "run id from the request"},
+                "body": {"type": "string", "description": "final review body ending with [[DONE-<run_id>]]"},
+            },
+            "required": ["project", "run_id", "body"],
+            "additionalProperties": False,
+        },
+        "annotations": {
+            "title": "Save review report",
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": False,
+            "openWorldHint": False,
+        },
+    },
 ]
+if READONLY:
+    TOOLS = [t for t in TOOLS if t.get("name") != "save_report"]
 
 def handle_request(msg):
     """JSON-RPC リクエスト1件を処理して応答 dict を返す（応答無しなら None）。"""
@@ -221,6 +345,8 @@ def handle_request(msg):
                 result = tool_search(args)
             elif name == "fetch":
                 result = tool_fetch(args)
+            elif name == "save_report" and not READONLY:
+                result = tool_save_report(args)
             else:
                 return err(-32601, f"unknown tool: {name}")
             # MCP tools/call の応答は content 配列。structuredContent も併用すると Deep Research が拾いやすい

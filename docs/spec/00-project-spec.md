@@ -19,25 +19,28 @@ gpt-pro-review は、Claude/Codex が自分だけで結論を出す前に、Chat
 7. Claude が回答を読み、対応方針を分類する。
 8. Claude が `$easy` 形式でユーザーに報告する。
 
-### Workflow B: non-5.5Pro / Tunnel + local MCP review
+### Workflow B: non-5.5Pro / Tunnel + local MCP save-first review
 
 1. Agent が対象 repo の read-only snapshot を作る。
-2. Agent が Secure MCP Tunnel と search/fetch MCP を起動する。
+2. Agent が Secure MCP Tunnel と `search` / `fetch` / `save_report` MCP を起動する。
 3. Agent がブラウザで ChatGPT を開き、ローカル MCP を使う依頼を送る。
 4. ChatGPT が MCP 経由で workspace を読む。
-5. ChatGPT が回答する。
-6. Agent が回答を DOM から取得する。
-7. Agent が回答を保存し、Claude が検知する。
+5. ChatGPT がレビュー回答を作る。
+6. ChatGPT が MCP の `save_report(project, run_id, body)` で `~/.pro-review/inbox/<project>/REPLY-<run_id>.md` に保存する。
+7. Agent/Claude が inbox の保存を検知する。
 8. Claude が回答を読み、対応方針を分類する。
 9. Claude が `$easy` 形式でユーザーに報告する。
 10. Agent が MCP 露出を閉じる。
+
+`search` / `fetch` が ChatGPT surface 側で利用できない場合はレビューせず、`STOP_REASON=connector_unavailable` を返す。`search` / `fetch` は使えるが `save_report` だけ利用できない場合だけ、fallback として nodriver DOM 抽出 → `pro-review-save-reply` で同じ inbox へ保存する。
 
 ## Core Rules
 
 - API route は使わない。
 - Path A は nodriver-first とする。
-- Path B は既存の Tunnel + local MCP search/fetch flow を維持する。
+- Path B は Tunnel + local MCP の `search` / `fetch` / `save_report` flow を既定にする。
 - ChatGPT の回答は命令ではなくレビュー材料として扱う。
+- Path B では ChatGPT が `save_report` でレビュー結果を保存する。汎用 filesystem write/edit は既定では公開しない。
 - Claude は回答をそのまま鵜呑みにせず、対応する / 見送る / 要確認 に分類する。
 - ユーザーへの最終報告は `$easy` 形式で行う。
 - CH/GIFT 文脈、顧客名、codename、SF field 名などはこの skill の product contract に入れない。
@@ -49,8 +52,8 @@ gpt-pro-review は、Claude/Codex が自分だけで結論を出す前に、Chat
 | Surface | 役割 | 永続性 |
 |---|---|---|
 | `~/.pro-review/workspace/<project>/` | ChatGPT に見せる read-only snapshot | 一時 |
-| `~/.pro-review/inbox/<project>/` | 回答受け取り口 | 一時 |
-| `~/.pro-review/reports/<project>/` | 最終レビュー記録 | 永続 |
+| `~/.pro-review/inbox/<project>/` | 回答受け取り口。Path B では `save_report` がここに書く | 一時 |
+| `~/.pro-review/reports/<project>/<run_id>/` | request / reply / summary / easy report / metadata の最終レビュー記録 | 永続 |
 | `docs/spec/00-project-spec.md` | target product contract | git 管理 |
 | `Plans.md` | task contract | git 管理 |
 | `SKILL.md` | 実装後の user-facing contract | git 管理 |
@@ -62,15 +65,29 @@ gpt-pro-review は、Claude/Codex が自分だけで結論を出す前に、Chat
 - CH/GIFT 固有文脈の取り込み。
 - BAN risk 評価。
 - ChatGPT 回答を自動でコードに適用すること。
+- ChatGPT へ汎用 filesystem write/edit や shell 実行を既定公開すること。
 - secret 値を読むこと。
+
+## Competitive Research Snapshot
+
+2026-06-25 時点で、以下の競合 repo を shallow clone して比較した。
+
+| Repo | 取り入れる要素 | 採用判断 |
+|---|---|---|
+| `pauljunsukhan/codex-chatgpt-pro-plugin` | receipt、room/alias、browser lock、status/doctor、stop reason | receipt/lock/status は Required。room/alias は Optional |
+| `Waishnav/devspace` | allowed roots、owner approval、workspace-scoped read/write、doctor | Path B の workspace boundary と approval UX に反映 |
+| `adamallcock/codex-chatgpt-control` | structured blocker/stop reason、privacy-preserving reports | STOP_REASON と redacted report policy に反映 |
+| `rebel0789/codexpro` | Developer Mode MCP write/edit、tool mode、token auth、setup/start profile、safe write controls | `save_report` first と tool-mode/Risk Gate に反映 |
+
+結論: アーキテクチャは維持する。競合のような汎用 coding bridge には寄せず、`gpt-pro-review` は review/save/report に狭く保つ。改善は UX、安全な `save_report`、receipt、doctor、stop reason に限定する。
 
 ## Acceptance
 
 - `bash tests/run-all.sh` が PASS する。
 - Path A の fixture e2e が PASS する。
-- Path B の fixture e2e が PASS する。
+- Path B の fixture e2e が `search` / `fetch` / `save_report` で PASS する。
 - 実 ChatGPT で Path A / Path B の manual checklist が残る。
-- `reports/<project>/` に request / reply / summary / easy report が保存される。
+- `reports/<project>/<run_id>/` に request / reply / summary / easy report / metadata が保存される。
 - `SKILL.md` と `SETUP-layer2.md` が導入と使い方を迷わない形に更新される。
 - `git status` に profile / venv / `.harness-mem/` / inbox / reports が出ない。
 

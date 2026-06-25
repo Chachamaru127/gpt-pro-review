@@ -172,8 +172,8 @@ mkdir -p "$INBOX"
 RA="1700000000123-aaa111"
 RB="1700000000123-bbb222"
 SINCE=1700000099
-"$SR" "$P" "$RA" --text "reply A [[DONE-$RA]]" >/dev/null
-"$SR" "$P" "$RB" --text "reply B [[DONE-$RB]]" >/dev/null
+"$SR" "$P" "$RA" --text "$(printf 'reply A\n[[DONE-%s]]' "$RA")" >/dev/null
+"$SR" "$P" "$RB" --text "$(printf 'reply B\n[[DONE-%s]]' "$RB")" >/dev/null
 touch "$INBOX/REPLY-$RB.md"
 [ "$(stat -f '%m' "$INBOX/REPLY-$RB.md")" -ge "$(stat -f '%m' "$INBOX/REPLY-$RA.md")" ] \
   || _fail "T7 setup: REPLY-B must be newer than REPLY-A"

@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# Path A lifecycle:
+#   browser-embed -> browser-drive -> save-reply -> watch -> finish
+#
+# Live browser mode may return FALLBACK:<reason> until nodriver setup is complete.
+set -euo pipefail
+umask 077
+
+usage() {
+  cat >&2 <<EOF
+usage: pro-review-browser-run <repo> [project] [--question "..."] [--fixture-html page.html] [--timeout sec]
+EOF
+  exit 2
+}
+
+REPO="${1:-}"; [ -n "$REPO" ] || usage; shift
+PROJECT=""
+QUESTION=""
+FIXTURE_HTML=""
+TIMEOUT="${TIMEOUT:-120}"
+if [ "${1:-}" ] && [ "${1#--}" = "$1" ]; then PROJECT="$1"; shift; fi
+while [ "${1:-}" ]; do
+  case "$1" in
+    --question) QUESTION="${2:-}"; shift 2;;
+    --fixture-html) FIXTURE_HTML="${2:-}"; shift 2;;
+    --timeout) TIMEOUT="${2:-120}"; shift 2;;
+    *) usage;;
+  esac
+done
+
+SK="$(cd "$(dirname "$0")" && pwd -P)"
+
+EMBED_ARGS=("$REPO")
+[ -n "$PROJECT" ] && EMBED_ARGS+=("$PROJECT")
+[ -n "$QUESTION" ] && EMBED_ARGS+=(--question "$QUESTION")
+EMBED_ARGS+=(--no-clip)
+
+EMBED_OUT=$("$SK/pro-review-browser-embed" "${EMBED_ARGS[@]}")
+PROJECT=$(printf '%s\n' "$EMBED_OUT" | awk '/^project_name:/{print $2; exit}')
+SINCE=$(printf '%s\n' "$EMBED_OUT" | awk '/^since:/{print $2; exit}')
+RUN_ID=$(printf '%s\n' "$EMBED_OUT" | awk '/^run_id:/{print $2; exit}')
+INBOX=$(printf '%s\n' "$EMBED_OUT" | awk '/^inbox:/{print $2; exit}')
+REQ=$(printf '%s\n' "$EMBED_OUT" | awk '/^request_file:/{print $2; exit}')
+
+[ -n "$PROJECT" ] && [ -n "$SINCE" ] && [ -n "$RUN_ID" ] && [ -n "$INBOX" ] && [ -n "$REQ" ] \
+  || { echo "[error] browser-embed output missing machine-readable fields" >&2; exit 1; }
+
+DRIVE_ARGS=(--run-id "$RUN_ID" --request-file "$REQ" --timeout "$TIMEOUT")
+if [ -n "$FIXTURE_HTML" ]; then
+  if grep -q '__RUN_ID__' "$FIXTURE_HTML" 2>/dev/null; then
+    FIXTURE_RENDERED=$(mktemp -t prr-browser-fixture-XXXXXX.html)
+    sed "s|__RUN_ID__|$RUN_ID|g" "$FIXTURE_HTML" > "$FIXTURE_RENDERED"
+    FIXTURE_HTML="$FIXTURE_RENDERED"
+  fi
+  DRIVE_ARGS+=(--fixture-html "$FIXTURE_HTML")
+fi
+
+set +e
+REPLY_BODY=$("$SK/pro-review-browser-drive" "${DRIVE_ARGS[@]}" 2> >(cat >&2))
+DRIVE_RC=$?
+set -e
+if [ "$DRIVE_RC" -eq 3 ]; then
+  printf '%s\n' "$REPLY_BODY"
+  echo "project_name: $PROJECT"
+  echo "run_id: $RUN_ID"
+  echo "request_file: $REQ"
+  echo "manual_save: printf '%s' '<reply>' | pro-review-save-reply $PROJECT $RUN_ID"
+  exit 3
+elif [ "$DRIVE_RC" -ne 0 ]; then
+  exit "$DRIVE_RC"
+fi
+
+SAVE_OUT=$(printf '%s' "$REPLY_BODY" | "$SK/pro-review-save-reply" "$PROJECT" "$RUN_ID")
+REPLY=$(printf '%s\n' "$SAVE_OUT" | awk '/^saved:/{print $2; exit}')
+W_OUT=$("$SK/pro-review-watch" "$INBOX" --run-id "$RUN_ID" --since "$((SINCE - 1))" --timeout 5 --interval 1 --stable 0.1 2>/dev/null)
+F_OUT=$(PRO_REVIEW_REPORT_MODE=path-a PRO_REVIEW_REPORT_SINCE="$SINCE" "$SK/pro-review-finish" "$PROJECT" "$REPLY" 2>&1)
+
+echo "project_name: $PROJECT"
+echo "since: $SINCE"
+echo "run_id: $RUN_ID"
+echo "request_file: $REQ"
+echo "$SAVE_OUT"
+echo "$W_OUT"
+echo "$F_OUT"

@@ -3,13 +3,14 @@
 # ここでブロックしないのは、この後にエージェントがブラウザ送信を挟むため。
 #
 # この後の流れ（エージェントが実行）:
-#   1) この出力の request を ChatGPT(GPT-5.5 Pro)に貼って送る（claude-in-chrome or 手貼り）
+#   1) この出力の request を ChatGPT に貼って送る（nodriver or 手貼り）
 #   2) pro-review-tunnel を background 起動（デーモン＝コネクタ接続先。active-project だけ公開）
 #   3) pro-review-watch <inbox> --since <since> を background 起動（返信検知→自動再開）
 #   4) 返信が来たら pro-review-finish <project> [reply] で reports 永続化＋露出を閉じる
 #
 # 使い方: pro-review-start <repo> [project] [--mode review|research|implement] [--question "..."]
 set -euo pipefail
+umask 077
 
 REPO="${1:?usage: pro-review-start <repo> [project] [--mode review|research|implement] [--question ...]}"; shift
 PROJECT=""
@@ -28,6 +29,8 @@ case "$MODE" in review|research|implement) ;; *) echo "[error] --mode は review
 
 SK="$HOME/.claude/skills/gpt-pro-review/scripts"
 BASE="$HOME/.pro-review"
+mkdir -p "$BASE"
+chmod 700 "$BASE" 2>/dev/null || true
 
 # 1. snapshot（scoped / secret-scan / read-only）。machine-readable 行から project を取得
 SNAP=$("$SK/pro-review-snapshot" "$REPO" ${PROJECT:+"$PROJECT"})
@@ -40,10 +43,11 @@ INBOX="$BASE/inbox/$PROJECT"
 # 2. 露出をこのプロジェクトだけに絞る（snapshot も設定するが明示的に上書き）
 printf '%s\n' "$PROJECT" > "$BASE/active-project"
 
-# 3. モード別の依頼文を生成（connector モード: フォルダ直読み＋inbox 書き戻し）
+# 3. モード別の依頼文を生成（connector モード: フォルダ直読み＋save_report 書き戻し）
 SINCE=$(date +%s)
 RUN_ID="$("$SK/pro-review-gen-run-id")"
 mkdir -p "$BASE/outbox"
+chmod 700 "$BASE/outbox" 2>/dev/null || true
 REQ="$BASE/outbox/${PROJECT}-${MODE}-${RUN_ID}.md"
 REPLY_REL="inbox/$PROJECT/REPLY-${RUN_ID}.md"
 case "$MODE" in
@@ -58,19 +62,32 @@ case "$MODE" in
     ;;
 esac
 cat > "$REQ" <<EOF
-あなたは接続済みの pro-review コネクタで、プロジェクト workspace に read-only でアクセスできます（この依頼中のみ有効）。コネクタは 2 つのツールを提供します:
+あなたは接続済みの pro-review コネクタで、プロジェクト workspace にアクセスできます（この依頼中のみ有効）。コネクタは 3 つのツールを提供します:
 - search(query): workspace 内のファイルを検索。query="" または "*" で全件一覧。
 - fetch(id): search が返した id（workspace 相対パス）を渡して全文を取得。
+- save_report(project, run_id, body): 最終レビュー結果だけをローカル inbox に保存。
+
+project: ${PROJECT}
+run_id: ${RUN_ID}
+保存先ID: ${REPLY_REL}
+
+送信前チェック:
+- ChatGPT 側で Developer Mode を有効化していること。
+- このチャットで pro-review Tunnel connector（同じ tunnel_id）を有効化していること。
+- search/fetch/save_report が表示・実行できない場合は、本文を推測せず STOP_REASON=connector_unavailable と NEXT_ACTION=ChatGPT側でpro-review Tunnel connectorを有効化 を返すこと。
 
 タスク:
 1) まず search("") で workspace 全ファイルの一覧を取り、構造を把握する。
 2) 必要なファイルを fetch(id) で順に取得して読む。
 3) $TASK
-4) 回答は **このチャットへの返信本文として**出力する（コネクタには書き込みツールが無いため）。
-5) 回答の **最終行に完了マーカー "[[DONE-${RUN_ID}]]" を必ず1行で記載**する（応答完了の自動検知に使う）。
+4) 回答本文の **最終行に完了マーカー "[[DONE-${RUN_ID}]]" を必ず1行で記載**する。
+5) 完成した回答本文を save_report(project="${PROJECT}", run_id="${RUN_ID}", body=<回答全文>) で保存する。
+6) search/fetch が使えない場合はレビューせず STOP_REASON=connector_unavailable と NEXT_ACTION=ChatGPT側でpro-review Tunnel connectorを有効化 を出力する。
+7) search/fetch は使えるが save_report だけ使えない場合のみ、このチャット本文に回答全文を出力する。
 
 応答スタイル: 結論先出し、根拠と該当箇所(file:line)を添える、冗長な前置きは避ける。
 EOF
+chmod 600 "$REQ" 2>/dev/null || true
 
 CLIP="no"
 if command -v pbcopy >/dev/null 2>&1; then pbcopy < "$REQ" && CLIP="yes"; fi
@@ -83,6 +100,6 @@ echo "since: $SINCE"
 echo "run_id: $RUN_ID"
 echo "request_file: $REQ"
 echo "clip: $CLIP"
-echo "---- ChatGPT(GPT-5.5 Pro)に貼る依頼 ----"
+echo "---- ChatGPT(non-5.5Pro + Tunnel connector)に貼る依頼 ----"
 cat "$REQ"
 echo "----------------------------------------"

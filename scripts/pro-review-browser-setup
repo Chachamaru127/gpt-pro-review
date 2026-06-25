@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+# Set up the dedicated Path A browser environment.
+#
+# Default behavior is local and safe:
+# - create ~/.pro-review/browser/profile with mode 700
+# - create ~/.pro-review/browser/venv if missing
+# - detect Chrome/Chromium
+# - check nodriver importability inside the venv
+# - exit 3 with manual login/install instructions when live use is not ready
+set -euo pipefail
+umask 077
+
+INSTALL=0
+ASSUME_LOGGED_IN=0
+OPEN_LOGIN=0
+while [ "${1:-}" ]; do
+  case "$1" in
+    --install) INSTALL=1; shift;;
+    --assume-logged-in|--mark-logged-in) ASSUME_LOGGED_IN=1; shift;;
+    --open-login) OPEN_LOGIN=1; shift;;
+    *) echo "usage: pro-review-browser-setup [--install] [--open-login] [--mark-logged-in]" >&2; exit 2;;
+  esac
+done
+
+BASE="$HOME/.pro-review"
+BROWSER_DIR="$BASE/browser"
+PROFILE="$BROWSER_DIR/profile"
+VENV="$BROWSER_DIR/venv"
+mkdir -p "$PROFILE" "$BROWSER_DIR"
+chmod 700 "$BASE" "$BROWSER_DIR" "$PROFILE" 2>/dev/null || true
+
+find_chrome() {
+  for p in \
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+    "/Applications/Chromium.app/Contents/MacOS/Chromium" \
+    "$HOME/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"; do
+    [ -x "$p" ] && { printf '%s\n' "$p"; return 0; }
+  done
+  command -v google-chrome 2>/dev/null || command -v chromium 2>/dev/null || true
+}
+
+CHROME="$(find_chrome)"
+if [ -n "$CHROME" ]; then
+  echo "OK chrome: $CHROME"
+else
+  echo "MANUAL chrome: Chrome/Chromium が見つかりません" >&2
+fi
+
+if [ ! -x "$VENV/bin/python" ]; then
+  python3 -m venv "$VENV"
+fi
+chmod 700 "$VENV" 2>/dev/null || true
+echo "OK venv: $VENV"
+echo "OK profile: $PROFILE"
+
+if [ "$INSTALL" = "1" ]; then
+  "$VENV/bin/python" -m pip install --upgrade pip nodriver
+fi
+
+if "$VENV/bin/python" - <<'PY' >/dev/null 2>&1
+import nodriver  # noqa: F401
+PY
+then
+  echo "OK nodriver: importable"
+  NODRIVER_OK=1
+else
+  echo "MANUAL nodriver: $VENV/bin/python -m pip install nodriver" >&2
+  NODRIVER_OK=0
+fi
+
+LOGIN_MARKER="$PROFILE/.chatgpt-login-ok"
+if [ "$ASSUME_LOGGED_IN" = "1" ]; then
+  : > "$LOGIN_MARKER"
+  echo "NOTE login: close the dedicated Chrome window before running Path A live e2e"
+fi
+if [ -f "$LOGIN_MARKER" ]; then
+  chmod 600 "$LOGIN_MARKER" 2>/dev/null || true
+  LOGIN_OK=1
+  echo "OK login: marker present"
+else
+  LOGIN_OK=0
+  LOGIN_CMD="\"$CHROME\" --user-data-dir=\"$PROFILE\" https://chatgpt.com/"
+  if [ "$OPEN_LOGIN" = "1" ] && [ -n "$CHROME" ]; then
+    echo "open_login: $LOGIN_CMD"
+    if [ "${PRO_REVIEW_OPEN_LOGIN_DRY_RUN:-0}" != "1" ]; then
+      "$CHROME" --user-data-dir="$PROFILE" https://chatgpt.com/ >/dev/null 2>&1 &
+    fi
+  fi
+  cat >&2 <<EOF
+MANUAL login: dedicated profile is not marked logged in.
+Open Chrome with:
+  $LOGIN_CMD
+Log in, then run one of:
+  pro-review-browser-setup --mark-logged-in
+  touch "$LOGIN_MARKER" && chmod 600 "$LOGIN_MARKER"
+Then close that Chrome window before running Path A live e2e so nodriver can use the profile.
+EOF
+fi
+
+echo "profile: $PROFILE"
+echo "venv: $VENV"
+echo "chrome: ${CHROME:-missing}"
+
+if [ -z "$CHROME" ] || [ "$NODRIVER_OK" != "1" ] || [ "$LOGIN_OK" != "1" ]; then
+  exit 3
+fi

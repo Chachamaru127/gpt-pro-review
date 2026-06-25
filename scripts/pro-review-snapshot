@@ -2,6 +2,7 @@
 # レビュー対象リポジトリの「クリーンなスナップショット」を ~/.pro-review/workspace に作る。
 # ライブのリポジトリを ChatGPT に晒さないための隔離コピー。.git や秘密情報は除外。
 set -euo pipefail
+umask 077
 
 REPO="${1:-$PWD}"
 REPO="$(cd "$REPO" && pwd)"
@@ -14,7 +15,10 @@ WS="$HOME/.pro-review/workspace/$PROJECT"
 INBOX="$HOME/.pro-review/inbox/$PROJECT"
 META="$HOME/.pro-review/metadata"            # MCP公開範囲の外（source path を外部へ晒さない）
 MARKER="$META/$PROJECT.source"
+mkdir -p "$HOME/.pro-review"
+chmod 700 "$HOME/.pro-review" 2>/dev/null || true
 mkdir -p "$META"
+chmod 700 "$META" 2>/dev/null || true
 
 # 同名・別パスの取り違え防止（marker は公開範囲外に保存）
 if [ -f "$MARKER" ] && [ "$(cat "$MARKER")" != "$REPO" ]; then
@@ -24,6 +28,7 @@ if [ -f "$MARKER" ] && [ "$(cat "$MARKER")" != "$REPO" ]; then
 fi
 
 mkdir -p "$WS" "$INBOX"
+chmod 700 "$INBOX" 2>/dev/null || true
 # 再snapshot時、前回 read-only にしたファイルを更新できるよう一旦書込可に
 chmod -R u+w "$WS" 2>/dev/null || true
 

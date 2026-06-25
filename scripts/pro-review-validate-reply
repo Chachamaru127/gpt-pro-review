@@ -1,0 +1,118 @@
+#!/usr/bin/env python3
+"""Validate a pro-review reply before watch/finish adopts it.
+
+Contract:
+- reply filename must be REPLY-<run_id>.md
+- reply must be directly under the provided inbox after realpath normalization
+- symlinks and non-regular files are rejected
+- the final line must be exactly [[DONE-<run_id>]]
+- the DONE marker may appear only once, on the final line
+"""
+import argparse
+import os
+import re
+import stat
+import sys
+
+RUN_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+REPLY_RE = re.compile(r"^REPLY-([A-Za-z0-9._-]+)\.md$")
+
+
+def die(msg, code=2):
+    sys.stderr.write(f"[pro-review-validate-reply] error: {msg}\n")
+    sys.exit(code)
+
+
+def validate_run_id(run_id):
+    if not RUN_ID_RE.match(run_id) or run_id in (".", ".."):
+        die(f"invalid run_id: {run_id!r} (must match {RUN_ID_RE.pattern}, not . or ..)")
+    if run_id.startswith(("-", ".")):
+        die(f"invalid run_id: {run_id!r} (must not start with '-' or '.')")
+
+
+def infer_run_id(reply_path):
+    base = os.path.basename(reply_path)
+    m = REPLY_RE.match(base)
+    if not m:
+        die(f"reply filename must be REPLY-<run_id>.md: {base!r}")
+    run_id = m.group(1)
+    validate_run_id(run_id)
+    return run_id
+
+
+def validate_reply(inbox, run_id=None, reply_path=None):
+    inbox_abs = os.path.abspath(inbox)
+    inbox_real = os.path.realpath(inbox_abs)
+    if not os.path.isdir(inbox_real):
+        die(f"inbox does not exist: {inbox}")
+
+    if reply_path is None:
+        if run_id is None:
+            die("either --run-id or reply_path is required")
+        validate_run_id(run_id)
+        reply_path = os.path.join(inbox_real, f"REPLY-{run_id}.md")
+    else:
+        reply_path = os.path.abspath(reply_path)
+        inferred = infer_run_id(reply_path)
+        if run_id is None:
+            run_id = inferred
+        else:
+            validate_run_id(run_id)
+            if inferred != run_id:
+                die(f"reply filename run_id {inferred!r} does not match expected {run_id!r}")
+
+    expected_name = f"REPLY-{run_id}.md"
+    if os.path.basename(reply_path) != expected_name:
+        die(f"reply filename must be {expected_name}")
+
+    if os.path.islink(reply_path):
+        die(f"reply must not be a symlink: {reply_path}")
+
+    try:
+        st = os.lstat(reply_path)
+    except OSError as e:
+        die(f"reply not found: {reply_path} ({e})")
+    if not stat.S_ISREG(st.st_mode):
+        die(f"reply must be a regular file: {reply_path}")
+    if st.st_size <= 0:
+        die(f"reply is empty: {reply_path}")
+
+    reply_real = os.path.realpath(reply_path)
+    if not (reply_real == inbox_real or reply_real.startswith(inbox_real + os.sep)):
+        die(f"reply escapes inbox: {reply_path}")
+
+    try:
+        with open(reply_path, "rb") as f:
+            data = f.read()
+    except OSError as e:
+        die(f"cannot read reply: {e}")
+
+    text = data.decode("utf-8", errors="replace")
+    lines = text.splitlines()
+    marker = f"[[DONE-{run_id}]]"
+    if not lines:
+        die("reply has no lines")
+    if lines[-1] != marker:
+        die(f"final line must be exactly {marker!r}")
+    marker_count = text.count(marker)
+    if marker_count != 1:
+        die(f"DONE marker must appear exactly once on the final line (found {marker_count})")
+
+    return reply_real
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Validate a pro-review reply file.")
+    ap.add_argument("inbox", help="project inbox directory")
+    ap.add_argument("reply_path", nargs="?", help="reply path; defaults to inbox/REPLY-<run_id>.md")
+    ap.add_argument("--run-id", help="expected run id")
+    ap.add_argument("--quiet", action="store_true", help="suppress success output")
+    args = ap.parse_args()
+
+    reply_real = validate_reply(args.inbox, args.run_id, args.reply_path)
+    if not args.quiet:
+        print(f"valid: {reply_real}")
+
+
+if __name__ == "__main__":
+    main()

@@ -4,9 +4,57 @@
 #   結果を検知したら必ず閉じる(=デーモン停止, active-project解除)。
 # これにより「使っている間だけ・そのプロジェクトだけ」露出する。
 #
-# 使い方: pro-review-run <repo> [project] [--question "観点"] [--timeout 秒]
+# 使い方:
+#   pro-review-run --pro --repo <repo> [--project name] [--question "..."] [--fixture-html page.html]
+#   pro-review-run --thinking --repo <repo> [--project name] [--question "..."]
+#   pro-review-run <repo> [project] [--question "観点"] [--timeout 秒]   # legacy
 # 注意: デーモンは OpenAI へ outbound 接続する。実行はユーザーのシェルで。
 set -euo pipefail
+umask 077
+
+SK_DIR="$(cd "$(dirname "$0")" && pwd -P)"
+
+if printf '%s\n' "$@" | grep -qE '^--(pro|thinking|repo|project|fixture-html)$'; then
+  MODE=""
+  REPO=""
+  PROJECT=""
+  QUESTION=""
+  FIXTURE_HTML=""
+  while [ "${1:-}" ]; do
+    case "$1" in
+      --pro) MODE="pro"; shift;;
+      --thinking) MODE="thinking"; shift;;
+      --repo) REPO="${2:-}"; shift 2;;
+      --project) PROJECT="${2:-}"; shift 2;;
+      --question) QUESTION="${2:-}"; shift 2;;
+      --fixture-html) FIXTURE_HTML="${2:-}"; shift 2;;
+      *) echo "usage: pro-review-run --pro|--thinking --repo <repo> [--project name] [--question ...]" >&2; exit 2;;
+    esac
+  done
+  [ -n "$MODE" ] || { echo "[error] --pro or --thinking is required" >&2; exit 2; }
+  [ -n "$REPO" ] || { echo "[error] --repo is required" >&2; exit 2; }
+  if [ "$MODE" = "pro" ]; then
+    ARGS=("$REPO")
+    [ -n "$PROJECT" ] && ARGS+=("$PROJECT")
+    [ -n "$QUESTION" ] && ARGS+=(--question "$QUESTION")
+    [ -n "$FIXTURE_HTML" ] && ARGS+=(--fixture-html "$FIXTURE_HTML")
+    exec "$SK_DIR/pro-review-browser-run" "${ARGS[@]}"
+  fi
+  if [ "$MODE" = "thinking" ]; then
+    ARGS=("$REPO")
+    [ -n "$PROJECT" ] && ARGS+=("$PROJECT")
+    [ -n "$QUESTION" ] && ARGS+=(--question "$QUESTION")
+    OUT=$("$SK_DIR/pro-review-start" "${ARGS[@]}")
+    echo "$OUT"
+    PROJECT_NAME=$(printf '%s\n' "$OUT" | awk '/^project_name:/{print $2; exit}')
+    INBOX=$(printf '%s\n' "$OUT" | awk '/^inbox:/{print $2; exit}')
+    RUN_ID=$(printf '%s\n' "$OUT" | awk '/^run_id:/{print $2; exit}')
+    echo "next_tunnel: pro-review-tunnel"
+    echo "next_check: pro-review-tunnel-check $PROJECT_NAME"
+    echo "next_watch: pro-review-watch $INBOX --run-id $RUN_ID --since 0"
+    exit 0
+  fi
+fi
 
 REPO="${1:?usage: pro-review-run <repo> [project] [--question ...]}"; shift
 PROJECT=""
@@ -23,6 +71,8 @@ done
 
 SK="$HOME/.claude/skills/gpt-pro-review/scripts"
 BASE="$HOME/.pro-review"
+mkdir -p "$BASE"
+chmod 700 "$BASE" 2>/dev/null || true
 
 # 1. snapshot（.git/秘密情報除外。プロジェクト別サブフォルダへ）
 SNAP=$("$SK/pro-review-snapshot" "$REPO" ${PROJECT:+"$PROJECT"})
@@ -54,47 +104,63 @@ if pgrep -f 'tunnel-client run --profile pro-review' >/dev/null 2>&1; then
 fi
 
 # 4. デーモン起動（このプロジェクトだけ公開された状態で）
-"$SK/pro-review-tunnel" > "$BASE/daemon.log" 2>&1 &
+("$SK/pro-review-tunnel" 2>&1 | "$SK/pro-review-redact-log" > "$BASE/daemon.log") &
 DPID=$!
+chmod 600 "$BASE/daemon.log" 2>/dev/null || true
 sleep 3
 if ! kill -0 "$DPID" 2>/dev/null; then
   echo "[error] デーモン起動失敗。$BASE/daemon.log を確認:" >&2
-  tail -5 "$BASE/daemon.log" >&2
+  tail -5 "$BASE/daemon.log" | "$SK/pro-review-redact-log" >&2
   exit 1
 fi
 echo "[open] アクセス開始: project=$PROJECT のみ公開、デーモン PID=$DPID"
 
-# 5. 貼り付け用の依頼文を生成（connector モード + inbox 書き戻し指示）
+# 5. 貼り付け用の依頼文を生成（legacy connector モード + save_report 書き戻し指示）
 START=$(date +%s)
+RUN_ID="$("$SK/pro-review-gen-run-id")"
 mkdir -p "$BASE/outbox"
-REQ="$BASE/outbox/${PROJECT}-request.md"
+REQ="$BASE/outbox/${PROJECT}-legacy-${RUN_ID}.md"
+REPLY_REL="inbox/$PROJECT/REPLY-${RUN_ID}.md"
 cat > "$REQ" <<EOF
-あなたは接続済みの pro-review コネクタで、プロジェクト workspace に read-only でアクセスできます（このレビュー中のみ有効）。コネクタは 2 つのツールを提供します:
+あなたは接続済みの pro-review コネクタで、プロジェクト workspace にアクセスできます（このレビュー中のみ有効）。コネクタは 3 つのツールを提供します:
 - search(query): workspace 内のファイルを検索。query="" または "*" で全件一覧。
 - fetch(id): search が返した id（workspace 相対パス）を渡して全文を取得。
+- save_report(project, run_id, body): 最終レビュー結果だけをローカル inbox に保存。
+
+project: ${PROJECT}
+run_id: ${RUN_ID}
+保存先ID: ${REPLY_REL}
+
+送信前チェック:
+- ChatGPT 側で Developer Mode を有効化していること。
+- このチャットで pro-review Tunnel connector（同じ tunnel_id）を有効化していること。
+- search/fetch/save_report が表示・実行できない場合は、本文を推測せず STOP_REASON=connector_unavailable と NEXT_ACTION=ChatGPT側でpro-review Tunnel connectorを有効化 を返すこと。
 
 タスク:
 1) search("") で workspace 全ファイル一覧を取得し、構造を把握する。
 2) 必要なファイルを fetch(id) で読む。
 3) 次の観点でレビュー: ${QUESTION:-正しさ(バグ/論理破綻)・セキュリティ・設計の妥当性・抜けているエッジケース。各指摘は file:line と 重大度(高/中/低)}
-4) 回答は **このチャットへの返信本文として**出力する（コネクタには書き込みツールが無い）。
-5) 最終行に "[[DONE-${START}]]" を必ず記載する（自動検知用）。
+4) 回答本文の最終行に "[[DONE-${RUN_ID}]]" を必ず記載する（自動検知用）。
+5) 完成した回答本文を save_report(project="${PROJECT}", run_id="${RUN_ID}", body=<回答全文>) で保存する。
+6) search/fetch が使えない場合はレビューせず STOP_REASON=connector_unavailable と NEXT_ACTION=ChatGPT側でpro-review Tunnel connectorを有効化 を出力する。
+7) search/fetch は使えるが save_report だけ使えない場合のみ、このチャット本文に回答全文を出力する。
 EOF
-echo "================ ChatGPT(GPT-5.5 Pro)に貼る依頼 ================"
+echo "run_id: $RUN_ID"
+echo "================ ChatGPT(non-5.5Pro + Tunnel connector)に貼る依頼 ================"
 cat "$REQ"
 echo "==============================================================="
 command -v pbcopy >/dev/null 2>&1 && pbcopy < "$REQ" && echo "(↑クリップボードにコピー済み。ChatGPTに貼ってください)"
 
 # 6. 結果を待つ（検知 or timeout で抜ける → trap が必ずアクセス遮断）
 echo "[waiting] $INBOX を監視中… (最大 ${TIMEOUT}s)"
-if WOUT="$("$SK/pro-review-watch" "$INBOX" --since "$START" --timeout "$TIMEOUT" --interval 3)"; then
+if WOUT="$("$SK/pro-review-watch" "$INBOX" --run-id "$RUN_ID" --since "$((START - 1))" --timeout "$TIMEOUT" --interval 3)"; then
   echo "$WOUT"
   # 返信を reports/ に永続化（後から参照できるように）
   REPLY=$(printf '%s\n' "$WOUT" | awk '/^REPLY:/{print $2; exit}')
   if [ -n "$REPLY" ] && [ -f "$REPLY" ]; then
-    REPORTS="$BASE/reports/$PROJECT"; mkdir -p "$REPORTS"
+    REPORTS="$BASE/reports/$PROJECT"; mkdir -p "$REPORTS"; chmod 700 "$REPORTS" 2>/dev/null || true
     TS=$(date +%Y%m%d-%H%M%S); DEST="$REPORTS/$TS-$(basename "$REPLY")"
-    cp "$REPLY" "$DEST" && echo "report_saved: $DEST"
+    cp "$REPLY" "$DEST" && chmod 600 "$DEST" 2>/dev/null || true && echo "report_saved: $DEST"
   fi
   echo "[done] レビュー受領。アクセスを閉じます。"
 else

@@ -1,23 +1,22 @@
 #!/usr/bin/env bash
 # tunnel-client から起動される MCP コマンドのエントリポイント。
 #
-# 重要: ChatGPT の **GPT-5.5 Pro は Deep Research surface** で、`search` と `fetch`
-# の 2 ツールしか呼ばない（公式: deep research models doesn't support tool calls or
-# MCP servers that don't implement this interface）。一方 Thinking 系は普通の MCP
-# ツールを呼べる。Pro でも Thinking でも動かすため、**search/fetch を実装した
-# 専用 MCP**（pro-review-mcp-search-fetch）を既定にする。
+# 重要: 既定では汎用 filesystem write/edit/bash を公開しない。
+# ChatGPT には workspace を読む search/fetch と、レビュー結果だけを保存する
+# bounded save_report を公開する。
 #
 # モード切替:
-#   既定                … search/fetch 専用 MCP（Pro/Thinking 両対応・read-only）
-#   PRO_REVIEW_FULL=1   … filesystem MCP を素のまま公開（Business/Enterprise/Edu のみ）
+#   既定                … search/fetch/save_report 専用 MCP
+#   PRO_REVIEW_FULL=1   … filesystem MCP を素のまま公開（明示 Risk Gate 用）
 #
 # 退役: PRO_REVIEW_MODE=readonly は廃止。filesystem MCP の read 系プロキシは
 #       search/fetch だけで Thinking も動くため不要と判断（2026-06-22 合議）。
 #       旧実装は scripts/_archive/pro-review-mcp-readonly に残す。
 #
-# 公開範囲: active-project の workspace（読）。ライブ repo は晒さない。
+# 公開範囲: active-project の workspace（読）と inbox（save_report のみ）。
+# ライブ repo は晒さない。
 set -euo pipefail
-SK="$HOME/.claude/skills/gpt-pro-review/scripts"
+SK="$(cd "$(dirname "$0")" && pwd -P)"
 WS_BASE="$HOME/.pro-review/workspace"
 INBOX_BASE="$HOME/.pro-review/inbox"
 ACTIVE="$HOME/.pro-review/active-project"
@@ -34,9 +33,18 @@ fi
 mkdir -p "$WS" "$INBOX"
 
 if [ "${PRO_REVIEW_FULL:-}" = "1" ]; then
-  # Business/Ent 専用: write 込みで素通し（ChatGPT が inbox に直接書ける旧フロー）
+  if [ "${PRO_REVIEW_FULL_CONFIRM:-}" != "I_UNDERSTAND_PRO_REVIEW_FULL" ]; then
+    echo "[error] PRO_REVIEW_FULL=1 は汎用 filesystem write/edit を公開する Risk Gate です。" >&2
+    echo "[error] 続行するには PRO_REVIEW_FULL_CONFIRM=I_UNDERSTAND_PRO_REVIEW_FULL を明示してください。" >&2
+    exit 2
+  fi
+  if [ "${PRO_REVIEW_FULL_DRY_RUN:-}" = "1" ]; then
+    echo "would_exec: npx -y $FS_PKG $WS $INBOX"
+    exit 0
+  fi
+  # 明示 Risk Gate 用: filesystem MCP を素通し。
   exec npx -y "$FS_PKG" "$WS" "$INBOX"
 else
-  # 既定: search/fetch 専用 MCP（Pro 互換・Thinking 互換・read-only）
+  # 既定: search/fetch/save_report 専用 MCP。
   exec "$SK/pro-review-mcp-search-fetch"
 fi

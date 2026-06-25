@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # pro-review-start のプロンプトテンプレ regression テスト。
-# 期待: search/fetch 指示 + [[DONE-${since}]] 末尾マーカー + 機械可読行。
+# 期待: search/fetch/save_report 指示 + [[DONE-${run_id}]] 末尾マーカー + 機械可読行。
 
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -37,9 +37,17 @@ assert_contains "$REQ" "$RUN_ID" "T1 request_file contains run_id"
 CONTENT=$(cat "$REQ")
 assert_contains "$CONTENT" "search("  "T1 search() 指示"
 assert_contains "$CONTENT" "fetch("   "T1 fetch() 指示"
+assert_contains "$CONTENT" "save_report" "T1 save_report 指示"
+assert_contains "$CONTENT" "Developer Mode" "T1 Developer Mode 前提"
+assert_contains "$CONTENT" "Tunnel connector" "T1 Tunnel connector 前提"
+assert_contains "$CONTENT" "STOP_REASON=connector_unavailable" "T1 connector unavailable stop"
+assert_contains "$CONTENT" "レビューせず" "T1 connector missing blocks fake review"
+assert_contains "$CONTENT" "project: $PROJECT" "T1 project 指示"
+assert_contains "$CONTENT" "run_id: $RUN_ID" "T1 run_id 指示"
 assert_contains "$CONTENT" "find bugs" "T1 question 反映"
 assert_contains "$CONTENT" "[[DONE-$RUN_ID]]" "T1 DONE marker uses run_id"
 assert_not_contains "$CONTENT" "[[DONE-$SINCE]]" "T1 DONE not seconds-only"
+assert_contains "$OUT" "ChatGPT(non-5.5Pro + Tunnel connector)" "T1 output header"
 
 # 各モードのテンプレ
 for M in research implement; do

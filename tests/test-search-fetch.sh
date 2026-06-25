@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# pro-review-mcp-search-fetch (Deep Research 互換 MCP) の regression テスト。
-# tools/list で search/fetch のみ + 動作 + path traversal 拒否。
+# pro-review-mcp-search-fetch の regression テスト。
+# tools/list で search/fetch/save_report のみ + 動作 + path traversal 拒否。
 
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=_assert.sh
 source "$SCRIPT_DIR/_assert.sh"
 
-MCP="$HOME/.claude/skills/gpt-pro-review/scripts/pro-review-mcp-search-fetch"
+MCP="$(repo_scripts_dir)/pro-review-mcp-search-fetch"
 [ -x "$MCP" ] || _fail "pro-review-mcp-search-fetch not executable: $MCP"
 
 echo "[test-search-fetch] start"
@@ -58,26 +58,38 @@ send({"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"fetch","arg
 r6 = recv()
 traversal = r6["result"].get("isError")
 
-send({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"write_file","arguments":{}}})
+body = "結論: 問題なし\\n[[DONE-1700000000123-aabbcc]]"
+send({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"save_report","arguments":{"project":"$PROJECT","run_id":"1700000000123-aabbcc","body":body}}})
 r7 = recv()
-unknown = r7.get("error",{}).get("message","")
+save_report = r7["result"]["structuredContent"]
+
+send({"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"save_report","arguments":{"project":"$PROJECT","run_id":"../bad","body":"x"}}})
+r8 = recv()
+save_bad = r8["result"].get("isError")
+
+send({"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"write_file","arguments":{}}})
+r9 = recv()
+unknown = r9.get("error",{}).get("message","")
 
 p.stdin.close(); p.terminate()
 print(json.dumps({
     "names": names, "ros": ros,
     "search_count": search_count, "search_calc": search_calc,
-    "fetch_text": fetch_text[:50], "traversal": traversal, "unknown": unknown,
+    "fetch_text": fetch_text[:50], "traversal": traversal,
+    "save_report": save_report, "save_bad": save_bad, "unknown": unknown,
 }))
 EOF
 )
 
 NAMES=$(printf '%s' "$RESULT" | python3 -c "import json,sys; d=json.load(sys.stdin); print(','.join(d['names']))")
-assert_eq "search,fetch" "$NAMES" "T1 only search/fetch exposed"
+assert_eq "search,fetch,save_report" "$NAMES" "T1 only bounded tools exposed"
 
 RO_SEARCH=$(printf '%s' "$RESULT" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['ros']['search'])")
 RO_FETCH=$(printf '%s' "$RESULT" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['ros']['fetch'])")
+RO_SAVE=$(printf '%s' "$RESULT" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['ros']['save_report'])")
 assert_eq "True" "$RO_SEARCH" "T2 search readOnlyHint:true"
 assert_eq "True" "$RO_FETCH"  "T2 fetch readOnlyHint:true"
+assert_eq "False" "$RO_SAVE"  "T2 save_report readOnlyHint:false"
 
 COUNT=$(printf '%s' "$RESULT" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['search_count'])")
 [ "$COUNT" -ge 2 ] || _fail "T3 search('') expected >= 2 files, got $COUNT"
@@ -92,7 +104,16 @@ assert_contains "$TEXT" "fn add" "T5 fetch returns content"
 TRAV=$(printf '%s' "$RESULT" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['traversal'])")
 assert_eq "True" "$TRAV" "T6 path traversal isError:true"
 
+SAVED=$(printf '%s' "$RESULT" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['save_report']['saved'])")
+assert_eq "True" "$SAVED" "T7 save_report saved:true"
+REPLY="$HOME/.pro-review/inbox/$PROJECT/REPLY-1700000000123-aabbcc.md"
+assert_file_exists "$REPLY" "T7 save_report wrote reply"
+assert_contains "$(cat "$REPLY")" "[[DONE-1700000000123-aabbcc]]" "T7 save_report marker"
+
+SAVE_BAD=$(printf '%s' "$RESULT" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['save_bad'])")
+assert_eq "True" "$SAVE_BAD" "T8 invalid save_report isError:true"
+
 UNK=$(printf '%s' "$RESULT" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['unknown'])")
-assert_contains "$UNK" "unknown tool" "T7 unknown tool error"
+assert_contains "$UNK" "unknown tool" "T9 unknown tool error"
 
 echo "[test-search-fetch] PASS"

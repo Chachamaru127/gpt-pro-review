@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Path B (Thinking-High / 非 Pro ローカル MCP) の統合テスト。
-# pro-review-start → 偽 reply を save-reply で投入 → watch 検知 → finish が reports 永続化。
+# Path B (Thinking-High / 非 5.5Pro ローカル MCP) の統合テスト。
+# pro-review-start → MCP save_report で投入 → watch 検知 → finish が reports 永続化。
 
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -13,7 +13,8 @@ REPO_SCRIPTS="$(repo_scripts_dir)"
 SR="$REPO_SCRIPTS/pro-review-save-reply"
 WA="$REPO_SCRIPTS/pro-review-watch"
 FI="$REPO_SCRIPTS/pro-review-finish"
-for f in "$ST" "$SR" "$WA" "$FI"; do
+MCP="$REPO_SCRIPTS/pro-review-mcp-search-fetch"
+for f in "$ST" "$SR" "$WA" "$FI" "$MCP"; do
   [ -x "$f" ] || _fail "executable missing: $f"
 done
 
@@ -31,10 +32,28 @@ INBOX=$(printf '%s\n'   "$OUT" | awk '/^inbox:/{print $2; exit}')
 [ -n "$SINCE" ] && [ -n "$RUN_ID" ] && [ -n "$INBOX" ] || _fail "S1 machine-readable missing"
 _ok "S1 since=$SINCE run_id=$RUN_ID inbox=$INBOX"
 
-# Step 2: 偽 reply を save-reply で投入（Thinking が出した本文を DOM 抽出した想定）
+# Step 2: 偽 reply を MCP save_report で投入（ChatGPT が MCP で保存する想定）
 FAKE_REPLY=$(printf 'workspace を search で見て fetch で読みました。\n結論: バグなし\n[[DONE-%s]]' "$RUN_ID")
-SR_OUT=$(printf '%s' "$FAKE_REPLY" | "$SR" "$PROJECT" "$RUN_ID")
-assert_exit_ok "$?" "S2 save-reply exit 0"
+SAVE_OUT=$(python3 <<EOF
+import json, subprocess
+p = subprocess.Popen(["$MCP"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1)
+def send(m):
+    p.stdin.write(json.dumps(m, ensure_ascii=False) + "\n")
+    p.stdin.flush()
+def recv():
+    return json.loads(p.stdout.readline())
+send({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"t","version":"0"}}})
+recv()
+send({"jsonrpc":"2.0","method":"notifications/initialized"})
+send({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"save_report","arguments":{"project":"$PROJECT","run_id":"$RUN_ID","body":"""$FAKE_REPLY"""}}})
+resp = recv()
+p.stdin.close()
+p.terminate()
+print(json.dumps(resp, ensure_ascii=False))
+EOF
+)
+SAVE_OK=$(printf '%s' "$SAVE_OUT" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['result']['structuredContent']['saved'])")
+assert_eq "True" "$SAVE_OK" "S2 save_report saved"
 REPLY_PATH="$INBOX/REPLY-$RUN_ID.md"
 assert_file_exists "$REPLY_PATH" "S2 reply persisted"
 

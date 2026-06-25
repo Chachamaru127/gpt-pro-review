@@ -1,0 +1,348 @@
+#!/usr/bin/env python3
+"""Drive/extract ChatGPT browser replies.
+
+Fixture mode is implemented first and used by CI:
+  pro-review-browser-drive --fixture-html page.html --run-id <run_id>
+
+Live mode drives a dedicated ChatGPT browser profile when setup is present:
+  exit 3 with FALLBACK:<reason>
+"""
+import argparse
+import asyncio
+import html
+import json
+import os
+import re
+import sys
+import time
+from html.parser import HTMLParser
+
+
+class AssistantParser(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.depth = 0
+        self.capture_depth = 0
+        self.current = []
+        self.messages = []
+        self.stop_visible = False
+        self.login_required = False
+
+    def handle_starttag(self, tag, attrs):
+        self.depth += 1
+        attrs_d = dict(attrs)
+        label_blob = " ".join(
+            str(attrs_d.get(k, ""))
+            for k in ("aria-label", "data-testid", "href", "role")
+        ).lower()
+        if attrs_d.get("data-message-author-role") == "assistant":
+            self.capture_depth = self.depth
+            self.current = []
+        if "stop" in label_blob and tag.lower() == "button":
+            self.stop_visible = True
+        if tag.lower() in {"button", "a"} and (
+            "login-button" in label_blob
+            or re.search(r"\b(log\s*in|sign\s*in)\b", label_blob, re.I)
+        ):
+            self.login_required = True
+
+    def handle_endtag(self, tag):
+        if self.capture_depth and self.depth == self.capture_depth:
+            text = "\n".join(part.strip() for part in self.current if part.strip())
+            if text.strip():
+                self.messages.append(text.strip())
+            self.capture_depth = 0
+            self.current = []
+        self.depth = max(0, self.depth - 1)
+
+    def handle_data(self, data):
+        if self.capture_depth:
+            self.current.append(data)
+
+
+def fallback(reason):
+    print(f"FALLBACK:{reason}")
+    return 3
+
+
+def validate_reply(text, run_id):
+    marker = f"[[DONE-{run_id}]]"
+    lines = text.splitlines()
+    if not lines:
+        raise ValueError("assistant reply is empty")
+    if lines[-1] != marker:
+        raise ValueError(f"final line must be exactly {marker}")
+    if text.count(marker) != 1:
+        raise ValueError("DONE marker must appear exactly once on the final line")
+    return text
+
+
+def extract_from_html(path, run_id):
+    with open(path, "rb") as f:
+        raw = f.read().decode("utf-8", errors="replace")
+    parser = AssistantParser()
+    parser.feed(raw)
+    if parser.login_required:
+        return fallback("login required")
+    if parser.stop_visible:
+        return fallback("response still generating")
+    if not parser.messages:
+        return fallback("assistant reply not found")
+    reply = html.unescape(parser.messages[-1])
+    try:
+        print(validate_reply(reply, run_id))
+        return 0
+    except ValueError as e:
+        sys.stderr.write(f"[pro-review-browser-drive] error: {e}\n")
+        return 2
+
+
+def live_paths():
+    base = os.path.expanduser("~/.pro-review/browser")
+    return {
+        "base": base,
+        "profile": os.path.join(base, "profile"),
+        "login_marker": os.path.join(base, "profile", ".chatgpt-login-ok"),
+        "venv_python": os.path.join(base, "venv", "bin", "python"),
+    }
+
+
+def find_chrome():
+    candidates = [
+        os.environ.get("PRO_REVIEW_CHROME"),
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        "/Applications/Chromium.app/Contents/MacOS/Chromium",
+        "/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
+    ]
+    for path in candidates:
+        if path and os.path.exists(path):
+            return path
+    return None
+
+
+def ensure_live_python():
+    try:
+        import nodriver  # noqa: F401
+        return True
+    except Exception:
+        paths = live_paths()
+        venv_python = paths["venv_python"]
+        current = os.path.abspath(sys.executable)
+        target = os.path.abspath(venv_python)
+        if (
+            os.path.exists(venv_python)
+            and current != target
+            and os.environ.get("PRO_REVIEW_BROWSER_REEXEC") != "1"
+        ):
+            os.environ["PRO_REVIEW_BROWSER_REEXEC"] = "1"
+            os.execv(venv_python, [venv_python] + sys.argv)
+        return False
+
+
+async def js(page, expression):
+    return await page.evaluate(expression, await_promise=True, return_by_value=True)
+
+
+async def wait_for_chat_input(page, timeout):
+    selectors = [
+        "#prompt-textarea",
+        "textarea",
+        "div[contenteditable='true']",
+        "[data-testid='composer-text-input']",
+        ".ProseMirror",
+    ]
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        for selector in selectors:
+            try:
+                element = await page.query_selector(selector)
+            except Exception:
+                element = None
+            if element:
+                return selector, element
+        await page.sleep(0.5)
+    return None, None
+
+
+async def fill_prompt(page, request_text):
+    payload = json.dumps(request_text)
+    script = f"""
+(() => {{
+  const text = {payload};
+  const selectors = [
+    '#prompt-textarea',
+    'textarea',
+    "div[contenteditable='true']",
+    "[data-testid='composer-text-input']",
+    '.ProseMirror'
+  ];
+  const el = selectors.map(s => document.querySelector(s)).find(Boolean);
+  if (!el) return {{ ok: false, reason: 'input not found' }};
+  el.focus();
+  if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {{
+    el.value = text;
+  }} else {{
+    el.textContent = text;
+  }}
+  el.dispatchEvent(new InputEvent('input', {{
+    bubbles: true,
+    cancelable: true,
+    inputType: 'insertText',
+    data: text
+  }}));
+  el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+  return {{
+    ok: true,
+    tag: el.tagName,
+    length: (el.value || el.textContent || '').length
+  }};
+}})()
+"""
+    return await js(page, script)
+
+
+async def click_send(page, timeout):
+    script = """
+(() => {
+  const candidates = [...document.querySelectorAll('button')];
+  const score = (button) => {
+    const label = [
+      button.getAttribute('aria-label') || '',
+      button.getAttribute('data-testid') || '',
+      button.textContent || ''
+    ].join(' ').toLowerCase();
+    if (button.disabled || button.getAttribute('aria-disabled') === 'true') return 0;
+    if (label.includes('send-button')) return 4;
+    if (label.includes('send prompt')) return 3;
+    if (label.includes('send message')) return 3;
+    if (label === 'send' || label.includes(' send ')) return 2;
+    if (label.includes('送信')) return 2;
+    return 0;
+  };
+  const button = candidates.sort((a, b) => score(b) - score(a)).find(b => score(b) > 0);
+  if (!button) return false;
+  button.click();
+  return true;
+})()
+"""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            if await js(page, script):
+                return True
+        except Exception:
+            pass
+        await page.sleep(0.5)
+    return False
+
+
+async def extract_live_reply(page, run_id, timeout):
+    deadline = time.time() + timeout
+    last_error = ""
+    while time.time() < deadline:
+        content = await page.get_content()
+        parser = AssistantParser()
+        parser.feed(content)
+        if parser.login_required:
+            return None, "login required"
+        if parser.messages:
+            reply = html.unescape(parser.messages[-1])
+            try:
+                return validate_reply(reply, run_id), None
+            except ValueError as exc:
+                last_error = str(exc)
+        await page.sleep(2)
+    return None, last_error or "timeout waiting for DONE marker"
+
+
+def classify_live_error(exc):
+    text = str(exc).lower()
+    profile_lock_terms = [
+        "user data directory is already in use",
+        "profile appears to be in use",
+        "singletonlock",
+        "singletoncookie",
+        "process singleton",
+        "cannot create default profile directory",
+    ]
+    if any(term in text for term in profile_lock_terms):
+        return "browser profile already open"
+    return "live browser error"
+
+
+async def drive_live(args):
+    paths = live_paths()
+    if not os.path.exists(paths["login_marker"]):
+        return fallback("login required")
+    if not args.request_file:
+        sys.stderr.write("[pro-review-browser-drive] --request-file is required in live mode\n")
+        return 2
+    try:
+        with open(args.request_file, "r", encoding="utf-8") as f:
+            request_text = f.read()
+    except OSError as exc:
+        sys.stderr.write(f"[pro-review-browser-drive] cannot read request file: {exc}\n")
+        return 2
+    if not ensure_live_python():
+        return fallback("nodriver unavailable")
+    import nodriver
+
+    chrome = find_chrome()
+    if not chrome:
+        return fallback("chrome unavailable")
+    browser = None
+    try:
+        browser = await nodriver.start(
+            user_data_dir=paths["profile"],
+            browser_executable_path=chrome,
+            headless=False,
+            browser_args=["--disable-notifications"],
+        )
+        page = await browser.get("https://chatgpt.com/")
+        await page.sleep(2)
+        selector, editor = await wait_for_chat_input(page, min(args.timeout, 30))
+        if not editor:
+            content = await page.get_content()
+            parser = AssistantParser()
+            parser.feed(content)
+            if parser.login_required:
+                return fallback("login required")
+            return fallback("composer not found")
+        result = await fill_prompt(page, request_text)
+        if not isinstance(result, dict) or not result.get("ok"):
+            await editor.click()
+            await editor.send_keys(request_text)
+        if not await click_send(page, 15):
+            return fallback("send button not found")
+        reply, reason = await extract_live_reply(page, args.run_id, args.timeout)
+        if reply is None:
+            return fallback(reason)
+        print(reply)
+        return 0
+    except Exception as exc:
+        sys.stderr.write(f"[pro-review-browser-drive] live error: {exc}\n")
+        return fallback(classify_live_error(exc))
+    finally:
+        if browser is not None:
+            try:
+                browser.stop()
+            except Exception:
+                pass
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Drive ChatGPT browser and extract the final assistant reply.")
+    ap.add_argument("--fixture-html", help="static HTML fixture to parse instead of live browser")
+    ap.add_argument("--run-id", required=True, help="expected run id for [[DONE-<run_id>]]")
+    ap.add_argument("--request-file", help="request markdown to send in live mode")
+    ap.add_argument("--timeout", type=float, default=120.0)
+    args = ap.parse_args()
+
+    if args.fixture_html:
+        return extract_from_html(args.fixture_html, args.run_id)
+
+    return asyncio.run(drive_live(args))
+
+
+if __name__ == "__main__":
+    sys.exit(main())

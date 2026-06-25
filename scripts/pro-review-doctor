@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# Diagnose local gpt-pro-review setup without printing secrets.
+set -euo pipefail
+
+SK="$(cd "$(dirname "$0")" && pwd -P)"
+BASE="$HOME/.pro-review"
+STATUS=0
+
+line() {
+  # line LEVEL KEY MESSAGE
+  printf '%s\t%s\t%s\n' "$1" "$2" "$3"
+}
+
+need_fix() { STATUS=1; line "FIX" "$1" "$2"; }
+manual() { line "MANUAL" "$1" "$2"; }
+ok() { line "OK" "$1" "$2"; }
+
+mkdir -p "$BASE"
+chmod 700 "$BASE" 2>/dev/null || true
+MODE=$(stat -f '%Lp' "$BASE" 2>/dev/null || echo unknown)
+[ "$MODE" = "700" ] && ok "base_mode" "~/.pro-review is 700" || need_fix "base_mode" "~/.pro-review should be 700"
+
+missing=0
+for s in \
+  pro-review-browser-setup pro-review-browser-embed pro-review-browser-drive pro-review-browser-run \
+  pro-review-mcp pro-review-mcp-search-fetch pro-review-save-reply \
+  pro-review-watch pro-review-finish pro-review-summarize \
+  pro-review-tunnel-check pro-review-redact-log; do
+  if [ -x "$SK/$s" ]; then
+    ok "script:$s" "executable"
+  else
+    missing=1
+    need_fix "script:$s" "missing or not executable"
+  fi
+done
+
+BROWSER_PY="$BASE/browser/venv/bin/python"
+if [ -x "$BROWSER_PY" ] && "$BROWSER_PY" - <<'PY' >/dev/null 2>&1
+import nodriver  # noqa: F401
+PY
+then
+  ok "nodriver" "venv module importable"
+elif python3 - <<'PY' >/dev/null 2>&1
+import nodriver  # noqa: F401
+PY
+then
+  ok "nodriver" "python module importable"
+else
+  manual "nodriver" "not installed; Path A live mode will use fallback"
+fi
+
+if command -v tunnel-client >/dev/null 2>&1 || [ -x "$BASE/bin/tunnel-client" ]; then
+  ok "tunnel_client" "found"
+else
+  manual "tunnel_client" "not found; Path B live tunnel needs setup"
+fi
+
+ENVF="$BASE/env.sh"
+if [ -f "$ENVF" ]; then
+  PERM=$(stat -f '%Lp' "$ENVF" 2>/dev/null || echo unknown)
+  [ "$PERM" = "600" ] && ok "env_file" "env.sh is 600" || need_fix "env_file" "env.sh should be 600"
+  grep -q 'CONTROL_PLANE_TUNNEL_ID=' "$ENVF" && ok "tunnel_id" "configured" || manual "tunnel_id" "missing"
+  grep -q 'CONTROL_PLANE_API_KEY=' "$ENVF" && ok "api_key" "configured" || manual "api_key" "missing"
+else
+  manual "env_file" "missing; create ~/.pro-review/env.sh with tunnel id and key"
+fi
+
+[ "$missing" -eq 0 ] || STATUS=1
+exit "$STATUS"

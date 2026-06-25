@@ -69,7 +69,16 @@ def main():
 
     base = os.path.expanduser("~/.pro-review")
     inbox = os.path.join(base, "inbox", project)
+    os.makedirs(base, exist_ok=True)
+    try:
+        os.chmod(base, 0o700)
+    except OSError:
+        pass
     os.makedirs(inbox, exist_ok=True)
+    try:
+        os.chmod(inbox, 0o700)
+    except OSError:
+        pass
 
     # 出力先強制: realpath で inbox 配下を出ない
     inbox_real = os.path.realpath(inbox)
@@ -89,8 +98,10 @@ def main():
             f.write(payload)
             f.flush()
             os.fsync(f.fileno())
+        os.chmod(tmp_path, 0o600)
         # rename はファイルレベルでアトミック（同一 FS）
         os.rename(tmp_path, dest)
+        os.chmod(dest, 0o600)
     except Exception as e:
         # クリーンアップしてから落とす
         try: os.unlink(tmp_path)
