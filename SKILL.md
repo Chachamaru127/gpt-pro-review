@@ -1,6 +1,6 @@
 ---
 name: gpt-pro-review
-description: Send a code review / research / implementation-draft request to ChatGPT when this agent needs an independent second opinion. Path A uses GPT-5.5 Pro via browser/nodriver with local DOM extraction. Path B uses non-5.5Pro ChatGPT with Secure MCP Tunnel, search/fetch, and bounded save_report. Both paths save REPLY-<run_id>.md, validate the final marker, persist a report bundle, and summarize findings for Claude/Codex to judge. Do NOT use for reviews this agent should do itself.
+description: Send a code review / research / implementation-draft request to ChatGPT when this agent needs an independent second opinion. Path A uses GPT-5.5 Pro via browser/nodriver with local DOM extraction. Path B uses non-5.5Pro ChatGPT via browser/nodriver plus Secure MCP Tunnel, search/fetch, and bounded save_report. Both paths save REPLY-<run_id>.md, validate the final marker, persist a report bundle, and summarize findings for Claude/Codex to judge. Do NOT use for reviews this agent should do itself.
 ---
 
 # gpt-pro-review
@@ -15,7 +15,7 @@ ChatGPT Web の別モデルに、レビュー / 調査 / 実装ドラフトを�
 | Path | 使う場面 | 読ませ方 | 保存方法 |
 |---|---|---|---|
 | Path A: 5.5Pro | Pro 品質が必要なレビュー | prompt に diff / packet を埋める | DOM 抽出 → `pro-review-save-reply` |
-| Path B: 非 5.5Pro | workspace を MCP で読ませる | `search` / `fetch` | ChatGPT が `save_report` |
+| Path B: 非 5.5Pro | nodriver で ChatGPT を開き、workspace を MCP で読ませる | `search` / `fetch` | ChatGPT が `save_report` |
 
 共通の最後:
 
@@ -36,6 +36,11 @@ pro-review-browser-setup --mark-logged-in
 # 専用 Chrome ウィンドウを閉じてから実行
 pro-review-run --pro --repo /path/to/repo --project my-review --question "bug と security を見て"
 ```
+
+`pro-review-run --pro` が `FALLBACK:login required` と判断した場合は、
+`pro-review-browser-setup --open-login` を自動実行して専用 Chrome の ChatGPT ログイン画面を開く。
+ユーザーが行うのはブラウザ上のログイン、Chrome を閉じること、`pro-review-browser-setup --mark-logged-in` の実行だけ。
+資格情報入力・MFA・CAPTCHA の代行はしない。
 
 Path A の ChatGPT ツール利用方針は既定で `auto`。
 `auto` は UI 上の Auto ボタン名ではなく、この skill の方針名。
@@ -61,14 +66,15 @@ Path B:
 
 ```bash
 pro-review-run --thinking --repo /path/to/repo --project my-review --question "bug と security を見て"
-pro-review-tunnel
-pro-review-tunnel-check my-review
 ```
 
-Path B では、`pro-review-run --thinking` が ChatGPT に貼る依頼文を作る。
-送信前に ChatGPT 側で Developer Mode と pro-review Tunnel connector をそのチャットで有効化する。
+Path B では、`pro-review-run --thinking` が snapshot 作成、Tunnel 起動、connector check、nodriver による ChatGPT UI 送信、watch、finish まで行う。
+送信前に ChatGPT 側で Developer Mode と pro-review Tunnel connector が登録済みである必要がある。
+実行時は nodriver が固定ラベル `pro-review Tunnel connector` をこのチャットで選択してから依頼文を送る。
+connector の作成・初回認可・MFA・権限付与は人間/管理者操作のまま。
 ChatGPT は `search("")`、`fetch(id)`、`save_report(project, run_id, body)` を使う。
 `search` / `fetch` / `save_report` が見えない場合はレビューせず、`STOP_REASON=connector_unavailable` を返す。
+connector 名が違う場合は `--connector-label "..."` を付ける。
 
 ## 重要な保存契約
 
@@ -134,7 +140,7 @@ pro-review-tunnel-check <project>
 bash tests/run-all.sh
 ```
 
-fixture では Path A / Path B / MCP hardening / report bundle / summary / doctor を検証する。
+fixture では Path A / Path B nodriver connector / MCP hardening / report bundle / summary / doctor を検証する。
 実 ChatGPT の manual e2e は `docs/manual-checklist.md` に記録する。
 
 ## 非目標

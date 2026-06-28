@@ -8,6 +8,7 @@
 #   pro-review-run --pro --repo <repo> [--project name] [--question "..."] [--fixture-html page.html]
 #     [--web-search auto|on|off] [--deep-research auto|on|off]
 #   pro-review-run --thinking --repo <repo> [--project name] [--question "..."]
+#     [--timeout sec] [--drive-timeout sec] [--connector-label "..."] [--fixture-html page.html]
 #   pro-review-run <repo> [project] [--question "観点"] [--timeout 秒]   # legacy
 # 注意: デーモンは OpenAI へ outbound 接続する。実行はユーザーのシェルで。
 set -euo pipefail
@@ -19,52 +20,55 @@ if printf '%s\n' "$@" | grep -qE '^--(pro|thinking|repo|project|fixture-html)$';
   MODE=""
   REPO=""
   PROJECT=""
-  QUESTION=""
-  FIXTURE_HTML=""
-  WEB_SEARCH="auto"
-  DEEP_RESEARCH="auto"
-  TOOL_POLICY_EXPLICIT=0
+	  QUESTION=""
+	  FIXTURE_HTML=""
+	  TIMEOUT=""
+	  DRIVE_TIMEOUT=""
+	  CONNECTOR_LABEL=""
+	  WEB_SEARCH="auto"
+	  DEEP_RESEARCH="auto"
+	  TOOL_POLICY_EXPLICIT=0
   while [ "${1:-}" ]; do
     case "$1" in
       --pro) MODE="pro"; shift;;
       --thinking) MODE="thinking"; shift;;
       --repo) REPO="${2:-}"; shift 2;;
       --project) PROJECT="${2:-}"; shift 2;;
-      --question) QUESTION="${2:-}"; shift 2;;
-      --fixture-html) FIXTURE_HTML="${2:-}"; shift 2;;
-      --web-search) WEB_SEARCH="${2:-}"; TOOL_POLICY_EXPLICIT=1; shift 2;;
-      --deep-research) DEEP_RESEARCH="${2:-}"; TOOL_POLICY_EXPLICIT=1; shift 2;;
-      *) echo "usage: pro-review-run --pro|--thinking --repo <repo> [--project name] [--question ...] [--web-search auto|on|off] [--deep-research auto|on|off]" >&2; exit 2;;
+	      --question) QUESTION="${2:-}"; shift 2;;
+	      --fixture-html) FIXTURE_HTML="${2:-}"; shift 2;;
+	      --timeout) TIMEOUT="${2:-}"; shift 2;;
+	      --drive-timeout) DRIVE_TIMEOUT="${2:-}"; shift 2;;
+	      --connector-label) CONNECTOR_LABEL="${2:-}"; shift 2;;
+	      --web-search) WEB_SEARCH="${2:-}"; TOOL_POLICY_EXPLICIT=1; shift 2;;
+	      --deep-research) DEEP_RESEARCH="${2:-}"; TOOL_POLICY_EXPLICIT=1; shift 2;;
+	      *) echo "usage: pro-review-run --pro|--thinking --repo <repo> [--project name] [--question ...] [--web-search auto|on|off] [--deep-research auto|on|off] [--timeout sec] [--drive-timeout sec] [--connector-label label]" >&2; exit 2;;
     esac
   done
   [ -n "$MODE" ] || { echo "[error] --pro or --thinking is required" >&2; exit 2; }
   [ -n "$REPO" ] || { echo "[error] --repo is required" >&2; exit 2; }
   if [ "$MODE" = "pro" ]; then
-    ARGS=("$REPO")
-    [ -n "$PROJECT" ] && ARGS+=("$PROJECT")
-    [ -n "$QUESTION" ] && ARGS+=(--question "$QUESTION")
-    [ -n "$FIXTURE_HTML" ] && ARGS+=(--fixture-html "$FIXTURE_HTML")
-    ARGS+=(--web-search "$WEB_SEARCH" --deep-research "$DEEP_RESEARCH")
-    exec "$SK_DIR/pro-review-browser-run" "${ARGS[@]}"
-  fi
+	    ARGS=("$REPO")
+	    [ -n "$PROJECT" ] && ARGS+=("$PROJECT")
+	    [ -n "$QUESTION" ] && ARGS+=(--question "$QUESTION")
+	    [ -n "$FIXTURE_HTML" ] && ARGS+=(--fixture-html "$FIXTURE_HTML")
+	    [ -n "$TIMEOUT" ] && ARGS+=(--timeout "$TIMEOUT")
+	    ARGS+=(--web-search "$WEB_SEARCH" --deep-research "$DEEP_RESEARCH")
+	    exec "$SK_DIR/pro-review-browser-run" "${ARGS[@]}"
+	  fi
   if [ "$MODE" = "thinking" ]; then
     if [ "$TOOL_POLICY_EXPLICIT" = "1" ]; then
       echo "[error] --web-search/--deep-research are Path A (--pro) options" >&2
       exit 2
     fi
-    ARGS=("$REPO")
-    [ -n "$PROJECT" ] && ARGS+=("$PROJECT")
-    [ -n "$QUESTION" ] && ARGS+=(--question "$QUESTION")
-    OUT=$("$SK_DIR/pro-review-start" "${ARGS[@]}")
-    echo "$OUT"
-    PROJECT_NAME=$(printf '%s\n' "$OUT" | awk '/^project_name:/{print $2; exit}')
-    INBOX=$(printf '%s\n' "$OUT" | awk '/^inbox:/{print $2; exit}')
-    RUN_ID=$(printf '%s\n' "$OUT" | awk '/^run_id:/{print $2; exit}')
-    echo "next_tunnel: pro-review-tunnel"
-    echo "next_check: pro-review-tunnel-check $PROJECT_NAME"
-    echo "next_watch: pro-review-watch $INBOX --run-id $RUN_ID --since 0"
-    exit 0
-  fi
+	    ARGS=("$REPO")
+	    [ -n "$PROJECT" ] && ARGS+=("$PROJECT")
+	    [ -n "$QUESTION" ] && ARGS+=(--question "$QUESTION")
+	    [ -n "$FIXTURE_HTML" ] && ARGS+=(--fixture-html "$FIXTURE_HTML")
+	    [ -n "$TIMEOUT" ] && ARGS+=(--timeout "$TIMEOUT")
+	    [ -n "$DRIVE_TIMEOUT" ] && ARGS+=(--drive-timeout "$DRIVE_TIMEOUT")
+	    [ -n "$CONNECTOR_LABEL" ] && ARGS+=(--connector-label "$CONNECTOR_LABEL")
+	    exec "$SK_DIR/pro-review-connector-run" "${ARGS[@]}"
+	  fi
 fi
 
 REPO="${1:?usage: pro-review-run <repo> [project] [--question ...]}"; shift

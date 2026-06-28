@@ -19,6 +19,8 @@ from collections.abc import Mapping
 from html.parser import HTMLParser
 
 TOOL_POLICY_CHOICES = ("auto", "on", "off")
+BROWSER_MODE_CHOICES = ("direct", "connector")
+DEFAULT_CONNECTOR_LABEL = "pro-review Tunnel connector"
 
 DEEP_RESEARCH_NEED_PATTERNS = [
     ("explicit-deep-research", re.compile(r"\bdeep\s*research\b|deepresearch|ディープリサーチ", re.I)),
@@ -75,6 +77,14 @@ class AssistantParser(HTMLParser):
 
 def fallback(reason):
     print(f"FALLBACK:{reason}")
+    return 3
+
+
+def connector_unavailable(label, detail=""):
+    print("STOP_REASON=connector_unavailable")
+    print(f"NEXT_ACTION=ChatGPT側で{label}をこのチャットで有効化")
+    if detail:
+        print(f"DETAIL={detail}")
     return 3
 
 
@@ -148,6 +158,23 @@ def extract_from_html(path, run_id):
     except ValueError as e:
         sys.stderr.write(f"[pro-review-browser-drive] error: {e}\n")
         return 2
+
+
+def fixture_connector_send(path, label):
+    with open(path, "rb") as f:
+        raw = f.read().decode("utf-8", errors="replace")
+    parser = AssistantParser()
+    parser.feed(raw)
+    if parser.login_required:
+        return fallback("login required")
+    normalized = re.sub(r"\s+", " ", raw).lower()
+    if label.lower() not in normalized:
+        return connector_unavailable(label, "connector label not found in fixture")
+    if not re.search(r'id=["\']prompt-textarea["\']|textarea|contenteditable=["\']true["\']|composer-text-input|ProseMirror', raw, re.I):
+        return fallback("composer not found")
+    print("sent: connector")
+    print(f"connector_label: {label}")
+    return 0
 
 
 def live_paths():
@@ -356,6 +383,216 @@ async def click_tools_menu_candidate(page):
         "ok": False,
         "reason": f"invalid tools result ({type(result).__name__})",
     }
+
+
+async def is_connector_selected(page, label):
+    payload = json.dumps(label)
+    script = f"""
+(() => {{
+  const wanted = String({payload} || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+  if (!wanted) return {{ ok: false, reason: 'empty connector label' }};
+  const norm = (s) => String(s || '').replace(/\\s+/g, ' ').trim();
+  const visible = (el) => {{
+    const style = window.getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return style.display !== 'none' && style.visibility !== 'hidden' &&
+      rect.width > 0 && rect.height > 0;
+  }};
+  const labelOf = (el) => norm([
+    el.getAttribute('aria-label'),
+    el.getAttribute('data-testid'),
+    el.getAttribute('title'),
+    el.textContent
+  ].filter(Boolean).join(' '));
+  const selected = (el) => {{
+    const target = el.closest('[aria-checked],[aria-selected],[aria-pressed],[data-state],[role="menuitemcheckbox"],[role="option"]') || el;
+    const state = [
+      target.getAttribute('aria-checked'),
+      target.getAttribute('aria-selected'),
+      target.getAttribute('aria-pressed'),
+      target.getAttribute('data-state')
+    ].join(' ').toLowerCase();
+    return /true|checked|selected|on/.test(state);
+  }};
+  const elements = [...document.querySelectorAll('button,[role="button"],[role="menuitem"],[role="menuitemcheckbox"],[role="option"],[data-testid],[aria-label],span,div')];
+  for (const el of elements) {{
+    const label = labelOf(el).toLowerCase();
+    if (label && label.includes(wanted) && visible(el) && selected(el)) {{
+      return {{ ok: true, label: labelOf(el).slice(0, 160) }};
+    }}
+  }}
+  return {{ ok: false, reason: 'selected connector not found' }};
+}})()
+"""
+    result = await js(page, script)
+    return js_object(result) or {
+        "ok": False,
+        "reason": f"invalid selected result ({type(result).__name__})",
+    }
+
+
+async def click_connector_candidate(page, label):
+    payload = json.dumps(label)
+    script = f"""
+(() => {{
+  const wanted = String({payload} || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+  if (!wanted) return {{ ok: false, reason: 'empty connector label' }};
+  const norm = (s) => String(s || '').replace(/\\s+/g, ' ').trim();
+  const visible = (el) => {{
+    const style = window.getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return style.display !== 'none' && style.visibility !== 'hidden' &&
+      rect.width > 0 && rect.height > 0;
+  }};
+  const disabled = (el) =>
+    el.disabled || el.getAttribute('aria-disabled') === 'true' ||
+    el.getAttribute('data-disabled') === 'true';
+  const composer = (el) =>
+    el.matches('textarea,input,#prompt-textarea,.ProseMirror,[role="textbox"],[contenteditable="true"]') ||
+    Boolean(el.closest('textarea,input,#prompt-textarea,.ProseMirror,[role="textbox"],[contenteditable="true"]'));
+  const labelOf = (el) => norm([
+    el.getAttribute('aria-label'),
+    el.getAttribute('data-testid'),
+    el.getAttribute('title'),
+    el.getAttribute('role'),
+    el.textContent
+  ].filter(Boolean).join(' '));
+  const selected = (el) => {{
+    const target = el.closest('[aria-checked],[aria-selected],[aria-pressed],[data-state],[role="menuitemcheckbox"],[role="option"]') || el;
+    const state = [
+      target.getAttribute('aria-checked'),
+      target.getAttribute('aria-selected'),
+      target.getAttribute('aria-pressed'),
+      target.getAttribute('data-state')
+    ].join(' ').toLowerCase();
+    return /true|checked|selected|on/.test(state);
+  }};
+  const score = (label) => {{
+    const lower = label.toLowerCase();
+    if (lower === wanted) return 100;
+    if (lower.includes(wanted)) return 90;
+    if (wanted.includes(lower) && lower.length >= 8) return 60;
+    return 0;
+  }};
+  const elements = [
+    ...document.querySelectorAll('button,[role="button"],[role="menuitem"],[role="menuitemcheckbox"],[role="option"],[cmdk-item],a,[data-testid],[aria-label],span,div')
+  ];
+  const matches = elements
+    .map((el, index) => ({{
+      el,
+      index,
+      label: labelOf(el),
+      target: el.closest('button,[role="button"],[role="menuitem"],[role="menuitemcheckbox"],[role="option"],[cmdk-item],a,[data-testid]') || el
+    }}))
+    .map((item) => ({{ ...item, score: score(item.label) }}))
+    .filter((item) => item.score > 0 && visible(item.el) && visible(item.target) && !disabled(item.target))
+    .filter((item) => !composer(item.el) && !composer(item.target))
+    .sort((a, b) => b.score - a.score || a.index - b.index);
+  for (const item of matches) {{
+    if (selected(item.target)) {{
+      return {{ ok: true, selected: true, label: item.label.slice(0, 160) }};
+    }}
+    try {{
+      item.target.click();
+      return {{ ok: true, selected: false, label: item.label.slice(0, 160) }};
+    }} catch (_) {{
+      continue;
+    }}
+  }}
+  return {{ ok: false, reason: 'connector item not found' }};
+}})()
+"""
+    result = await js(page, script)
+    return js_object(result) or {
+        "ok": False,
+        "reason": f"invalid connector result ({type(result).__name__})",
+    }
+
+
+async def click_connector_menu_candidate(page):
+    script = """
+(() => {
+  const norm = (s) => String(s || '').replace(/\\s+/g, ' ').trim();
+  const visible = (el) => {
+    const style = window.getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return style.display !== 'none' && style.visibility !== 'hidden' &&
+      rect.width > 0 && rect.height > 0;
+  };
+  const disabled = (el) =>
+    el.disabled || el.getAttribute('aria-disabled') === 'true' ||
+    el.getAttribute('data-disabled') === 'true';
+  const labelOf = (el) => norm([
+    el.getAttribute('aria-label'),
+    el.getAttribute('data-testid'),
+    el.getAttribute('title'),
+    el.textContent
+  ].filter(Boolean).join(' '));
+  const selectors = [
+    '#composer-plus-btn',
+    '[data-testid="composer-plus-btn"]',
+    'button[aria-label="Tools"]',
+    'button[aria-label*="Tools"]',
+    'button[aria-label*="ツール"]',
+    'button[aria-label*="コネクタ"]',
+    'button[aria-label*="Connectors"]',
+    'button[aria-label*="Plugins"]'
+  ];
+  for (const selector of selectors) {
+    const el = document.querySelector(selector);
+    if (el && visible(el) && !disabled(el)) {
+      el.click();
+      return { ok: true, label: labelOf(el).slice(0, 160), selector };
+    }
+  }
+  const labelPattern = /\\b(tools?|connectors?|plugins?|apps?|mcp)\\b|ツール|コネクタ|プラグイン|アプリ|追加|添付|ファイルなどを追加|\\+/i;
+  const buttons = [...document.querySelectorAll('button,[role="button"]')];
+  for (const el of buttons) {
+    const label = labelOf(el);
+    if (label && labelPattern.test(label) && visible(el) && !disabled(el)) {
+      el.click();
+      return { ok: true, label: label.slice(0, 160), selector: 'label' };
+    }
+  }
+  return { ok: false, reason: 'connector menu not found' };
+})()
+"""
+    result = await js(page, script)
+    return js_object(result) or {
+        "ok": False,
+        "reason": f"invalid connector menu result ({type(result).__name__})",
+    }
+
+
+async def select_connector_mode(page, label, timeout):
+    deadline = time.time() + timeout
+    attempts = []
+    selected = await is_connector_selected(page, label)
+    if selected.get("ok"):
+        return True, f"already-selected:{selected.get('label', label)}"
+    first = await click_connector_candidate(page, label)
+    if first.get("ok"):
+        await page.sleep(0.5)
+        return True, f"visible:{first.get('label', label)}"
+    attempts.append(f"visible={first.get('reason', 'not found')}")
+    while time.time() < deadline:
+        opened = await click_connector_menu_candidate(page)
+        if not opened.get("ok"):
+            attempts.append(f"menu={opened.get('reason', 'not found')}")
+            break
+        await page.sleep(0.8)
+        selected = await is_connector_selected(page, label)
+        if selected.get("ok"):
+            return True, f"selected:{selected.get('label', label)}"
+        clicked = await click_connector_candidate(page, label)
+        if clicked.get("ok"):
+            await page.sleep(0.5)
+            return True, f"menu:{opened.get('label', '')}->{clicked.get('label', label)}"
+        attempts.append(
+            f"menu:{opened.get('label', '')}->{clicked.get('reason', 'connector item not found')}"
+        )
+        await page.sleep(0.5)
+    return False, " | ".join(attempts[-4:])
 
 
 async def select_deep_research_via_slash(page, timeout):
@@ -577,31 +814,54 @@ async def drive_live(args):
             if parser.login_required:
                 return fallback("login required")
             return fallback("composer not found")
-        policy = args.deep_research
-        if policy == "auto":
-            policy = parse_deep_research_policy(request_text)
-        select_deep_research, decision_reason = decide_deep_research_selection(policy, request_text)
-        if select_deep_research:
-            selected, detail = await select_deep_research_mode(page, min(args.timeout, 30))
+        if args.mode == "connector":
+            selected, detail = await select_connector_mode(
+                page, args.connector_label, min(args.timeout, 30)
+            )
             if not selected:
                 sys.stderr.write(
-                    "[pro-review-browser-drive] deep research selection failed: "
-                    f"{decision_reason}; {detail}\n"
+                    "[pro-review-browser-drive] connector selection failed: "
+                    f"{args.connector_label}; {detail}\n"
                 )
-                return fallback("deep research unavailable")
+                return connector_unavailable(args.connector_label, detail)
             sys.stderr.write(
-                "[pro-review-browser-drive] deep research selected: "
-                f"{decision_reason}; {detail}\n"
+                "[pro-review-browser-drive] connector selected: "
+                f"{args.connector_label}; {detail}\n"
             )
             selector, editor = await wait_for_chat_input(page, min(args.timeout, 30))
             if not editor:
-                return fallback("composer not found after deep research selection")
+                return fallback("composer not found after connector selection")
+        else:
+            policy = args.deep_research
+            if policy == "auto":
+                policy = parse_deep_research_policy(request_text)
+            select_deep_research, decision_reason = decide_deep_research_selection(policy, request_text)
+            if select_deep_research:
+                selected, detail = await select_deep_research_mode(page, min(args.timeout, 30))
+                if not selected:
+                    sys.stderr.write(
+                        "[pro-review-browser-drive] deep research selection failed: "
+                        f"{decision_reason}; {detail}\n"
+                    )
+                    return fallback("deep research unavailable")
+                sys.stderr.write(
+                    "[pro-review-browser-drive] deep research selected: "
+                    f"{decision_reason}; {detail}\n"
+                )
+                selector, editor = await wait_for_chat_input(page, min(args.timeout, 30))
+                if not editor:
+                    return fallback("composer not found after deep research selection")
         result = await fill_prompt(page, request_text)
         if not isinstance(result, dict) or not result.get("ok"):
             await editor.click()
             await editor.send_keys(request_text)
         if not await click_send(page, 15):
             return fallback("send button not found")
+        if args.send_only:
+            print("sent: connector" if args.mode == "connector" else "sent: direct")
+            if args.mode == "connector":
+                print(f"connector_label: {args.connector_label}")
+            return 0
         reply, reason = await extract_live_reply(page, args.run_id, args.timeout)
         if reply is None:
             return fallback(reason)
@@ -623,11 +883,19 @@ def main():
     ap.add_argument("--fixture-html", help="static HTML fixture to parse instead of live browser")
     ap.add_argument("--run-id", required=True, help="expected run id for [[DONE-<run_id>]]")
     ap.add_argument("--request-file", help="request markdown to send in live mode")
+    ap.add_argument("--mode", choices=BROWSER_MODE_CHOICES, default="direct",
+                    help="direct extracts DOM reply; connector selects a ChatGPT connector and sends")
+    ap.add_argument("--connector-label", default=os.environ.get("PRO_REVIEW_CONNECTOR_LABEL", DEFAULT_CONNECTOR_LABEL),
+                    help="visible ChatGPT connector label to select in connector mode")
+    ap.add_argument("--send-only", action="store_true",
+                    help="return after sending instead of waiting for a DOM reply")
     ap.add_argument("--deep-research", choices=TOOL_POLICY_CHOICES, default="auto",
                     help="select Deep Research in ChatGPT UI before sending: auto|on|off")
     ap.add_argument("--timeout", type=float, default=120.0)
     args = ap.parse_args()
 
+    if args.fixture_html and args.mode == "connector":
+        return fixture_connector_send(args.fixture_html, args.connector_label)
     if args.fixture_html:
         return extract_from_html(args.fixture_html, args.run_id)
 

@@ -34,6 +34,26 @@ done
 
 SK="$(cd "$(dirname "$0")" && pwd -P)"
 
+maybe_open_login() {
+  local drive_output="$1"
+  if ! printf '%s\n' "$drive_output" | grep -qx 'FALLBACK:login required'; then
+    return 0
+  fi
+  echo "[pro-review-browser-run] login required; opening dedicated ChatGPT login browser" >&2
+  local setup_out setup_rc
+  set +e
+  setup_out=$("$SK/pro-review-browser-setup" --open-login 2>&1)
+  setup_rc=$?
+  set -e
+  printf '%s\n' "$setup_out" >&2
+  echo "login_action: open-login attempted"
+  echo "login_setup_exit: $setup_rc"
+  echo "login_next: log in in the opened browser, close that Chrome window, then run: pro-review-browser-setup --mark-logged-in"
+  printf 'login_rerun: pro-review-run --pro --repo %q --project %q' "$REPO" "$PROJECT"
+  [ -n "$QUESTION" ] && printf ' --question %q' "$QUESTION"
+  printf ' --web-search %q --deep-research %q\n' "$WEB_SEARCH" "$DEEP_RESEARCH"
+}
+
 EMBED_ARGS=("$REPO")
 [ -n "$PROJECT" ] && EMBED_ARGS+=("$PROJECT")
 [ -n "$QUESTION" ] && EMBED_ARGS+=(--question "$QUESTION")
@@ -67,6 +87,7 @@ DRIVE_RC=$?
 set -e
 if [ "$DRIVE_RC" -eq 3 ]; then
   printf '%s\n' "$REPLY_BODY"
+  maybe_open_login "$REPLY_BODY"
   echo "project_name: $PROJECT"
   echo "run_id: $RUN_ID"
   echo "request_file: $REQ"

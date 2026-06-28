@@ -229,6 +229,7 @@ ChatGPT Web / Developer Mode / MCP の実利用制約と競合調査を踏まえ
 | 6.8 | [lane:gate][tdd:required] Path A orchestrator を完成: `browser-embed` → `browser-drive` → `save-reply` → `watch` → `finish` → Claude 用 summary input を一気通貫する | fixture e2e で `reports/<project>/` に保存され、保存結果に next-action synthesis 用メタデータ（mode/project/since/request/reply/report）が残る。実測: `tests/test-browser-run.sh`, `tests/test-report-bundle.sh`, `bash tests/run-all.sh` pass=26 fail=0 | 6.7 | cc:完了 |
 | 6.7r | [lane:gate][tdd:required] **(R10)** reply matching/marker validation: `pro-review-validate-reply` を追加し、`REPLY-<run_id>.md` のみ・inbox 配下・非 symlink・最終行 `[[DONE-<run_id>]]` 完全一致を必須にする。`watch`/`finish` の「inbox 最新を採用」をこの検証経由に変える（現状無検証: `pro-review-watch:27-80`, `pro-review-finish:26-43`） | `tests/test-reply-matching.sh` で 別 since/本文中のみ marker/別 file/中間行 marker は fail、正規 reply のみ pass。既存 integration 回帰維持。実測: `bash tests/run-all.sh` pass=26 fail=0 | 6.5b | cc:完了 |
 | 6.8b | [lane:gate][tdd:required] Path A fallback chain: `browser-drive` が `exit 3 FALLBACK:<理由>` を返したら、手貼り（`save-reply`）へ縮退し、止まらず次に貼る文面を提示する | login要求 / selector drift / timeout / browser 消失の fixture で縮退し、nodriver 未導入環境でも skill 全体が緑。実測: `tests/test-browser-run.sh`, `bash tests/run-all.sh` pass=26 fail=0 | 6.7 | cc:完了 |
+| 6.8c | [lane:gate][tdd:required] Path A login fallback UX: `pro-review-run --pro` が `FALLBACK:login required` を受けたら `pro-review-browser-setup --open-login` を自動実行し、ログイン後の close / `--mark-logged-in` / rerun を機械可読行で出す | live marker missing fixture で `login_action: open-login attempted` / `login_next` / `login_rerun` が出る。資格情報入力・MFA・CAPTCHA は人間操作のまま。実測: `bash tests/test-browser-run.sh`, `bash tests/run-all.sh` pass=26 fail=0 | 6.8b | cc:完了 |
 | 6.9 | [lane:gate][tdd:required] Pro レビュー回答を Claude が読むための `pro-review-summarize` を追加し、指摘を「対応する / 見送る / 要確認」に分類する | fixture reply から severity / file:line / recommendation / user decision を抽出し、JSON + Markdown summary を生成する。`finish` から summary JSON/Markdown も保存。実測: `tests/test-summarize.sh`, `bash tests/run-all.sh` pass=26 fail=0 | 6.8 | cc:完了 |
 
 ## Stage 3: Path B（非 5.5Pro / Tunnel + local MCP 既存 flow の UX 完成）
@@ -293,11 +294,11 @@ closeout:      6.17 ↔ 6.18 → 6.19
 
 ## Current execution snapshot（2026-06-25）
 
-- fixture / unit / docs gate: `bash tests/run-all.sh` pass=26 fail=0（Path A live/connector-gate 反映後に再実行済み）
-- 実装済み: Path A live driver + fixture orchestrator、Path B `save_report` first、reply validation、summary、doctor、tunnel-check、report bundle、unified `pro-review-run`
+- fixture / unit / docs gate: `bash tests/run-all.sh` pass=27 fail=0（Path B nodriver connector-run 追加後に再実行済み）
+- 実装済み: Path A live driver + fixture orchestrator、Path B `save_report` first、Path B nodriver connector orchestrator、reply validation、summary、doctor、tunnel-check、report bundle、unified `pro-review-run`
 - 実環境 smoke: `scripts/pro-review-doctor` OK、nodriver venv install 済み。Path A clean repo live は ChatGPT login marker 後に成功し、summary `total=1`。Path B は local tunnel / tool list は OK。`save_report` 付きでも read-only (`search,fetch`) でも ChatGPT 側 app creation が `Something went wrong` で失敗するため、未解決点は connector/app creation 権限または ChatGPT UI 側
-- 追加 UX: `pro-review-browser-setup --open-login` で専用 profile を開き、ログイン後 `pro-review-browser-setup --mark-logged-in` で live driver gate を開く。Path A 実行前に専用 Chrome を閉じるよう明記（profile lock 回避）
-- 追加 UX: Path B 依頼文に Developer Mode / pro-review Tunnel connector 有効化前提と、未有効時の `STOP_REASON=connector_unavailable` を明記
+- 追加 UX: `pro-review-run --pro` が `FALLBACK:login required` を受けたら `pro-review-browser-setup --open-login` を自動実行し、専用 profile のログイン画面を開く。ログイン後 `pro-review-browser-setup --mark-logged-in` で live driver gate を開く。Path A 実行前に専用 Chrome を閉じるよう明記（profile lock 回避）
+- 追加 UX: Path B は `pro-review-run --thinking` で snapshot → tunnel/check → nodriver connector選択 → 依頼文送信 → watch → finish まで実行する。connector 作成/初回認可/MFA/管理者権限は human gate のまま、既存 connector の選択は固定ラベル `pro-review Tunnel connector` で決定論的に行い、未検出時は `STOP_REASON=connector_unavailable` で fail-closed
 - 残 gate: 6.18 Path B ChatGPT app creation / connector enablement、6.19 final HANDOFF
 - live 前提確認 command:
   - `scripts/pro-review-doctor`

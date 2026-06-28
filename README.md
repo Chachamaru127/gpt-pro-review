@@ -70,7 +70,7 @@ Path A は MCP 不要です。
 | Path | 使う時 | 仕組み | 保存方法 |
 |---|---|---|---|
 | Path A | Pro 品質がほしい時 | Nodriver（= Chrome を自動操作する Python ライブラリ）で ChatGPT Web を動かす | 画面から回答を取得して保存 |
-| Path B | ChatGPT に workspace を読ませたい時 | Secure MCP Tunnel（= OpenAI 公式の安全なトンネル）で `search` / `fetch` / `save_report` を渡す | ChatGPT が `save_report` で保存 |
+| Path B | ChatGPT に workspace を読ませたい時 | Nodriver で ChatGPT Web を操作し、Secure MCP Tunnel で `search` / `fetch` / `save_report` を渡す | ChatGPT が `save_report` で保存 |
 
 迷ったら Path A です。
 
@@ -193,6 +193,9 @@ pro-review-browser-setup --open-login
 
 開いた Chrome で ChatGPT にログインします。
 
+未ログインのまま `pro-review-run --pro` を実行した時も、
+tool が `FALLBACK:login required` と判断して同じログイン画面を自動で開きます。
+
 ログイン後に marker（= ログイン済み印）を付けます。
 
 ```bash
@@ -292,7 +295,7 @@ Secure MCP Tunnel は、ChatGPT とあなたの PC を安全につなぐ通路�
 
 ## Path B 使い方
 
-まず依頼文を作ります。
+`pro-review-run --thinking` が snapshot 作成、tunnel 起動、tool 確認、nodriver での connector 選択、依頼文送信、watch、finish まで行います。
 
 ```bash
 pro-review-run --thinking \
@@ -301,25 +304,15 @@ pro-review-run --thinking \
   --question "bug と security を見て"
 ```
 
-次に tunnel を起動します。
-
-```bash
-pro-review-tunnel
-```
-
-別の terminal で確認します。
-
-```bash
-pro-review-tunnel-check my-review
-```
-
-ChatGPT 側では、次を有効にします。
+ChatGPT 側では、事前に次を登録しておきます。
 
 1. Developer Mode
 2. pro-review Tunnel connector
 3. 同じ tunnel_id の connector
 
-そのチャットに依頼文を貼ります。
+実行時は nodriver が `pro-review Tunnel connector` という固定ラベルを探して、そのチャットで選択してから送信します。
+connector 名が違う場合は `--connector-label "..."` を付けます。
+connector 作成、初回認可、MFA、管理者権限付与は人間操作のままです。
 
 ChatGPT は次の順で動きます。
 
@@ -372,9 +365,11 @@ pro-review-run --pro \
 ### `FALLBACK:login required`
 
 ChatGPT 専用 profile にログインできていません。
+`pro-review-run --pro` はこの fallback を見たら、専用 Chrome のログイン画面を自動で開きます。
 
 ```bash
-pro-review-browser-setup --open-login
+# 開いた Chrome で ChatGPT にログインする
+# その Chrome を閉じる
 pro-review-browser-setup --mark-logged-in
 ```
 
@@ -397,6 +392,7 @@ ChatGPT UI に `Deep research` が出るか確認します。
 Path B で connector が有効ではありません。
 
 ChatGPT 側で Developer Mode と pro-review connector を有効にします。
+登録済み connector が見つからない場合、nodriver は送信せずここで止まります。
 
 ### `STOP_REASON=tunnel_not_running`
 
@@ -423,7 +419,7 @@ pro-review-tunnel-check <project>
 | `pro-review-browser-setup --install` | Path A のブラウザ環境を用意 |
 | `pro-review-browser-setup --open-login` | 専用 Chrome で ChatGPT ログイン |
 | `pro-review-run --pro` | Path A 実行 |
-| `pro-review-run --thinking` | Path B 依頼文作成 |
+| `pro-review-run --thinking` | Path B 実行（tunnel + nodriver connector送信 + 保存待ち） |
 | `pro-review-tunnel` | Path B tunnel 起動 |
 | `pro-review-tunnel-check <project>` | tunnel と tool を確認 |
 | `pro-review-watch` | inbox の返信を待つ |

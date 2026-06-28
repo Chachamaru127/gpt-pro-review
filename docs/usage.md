@@ -19,10 +19,13 @@ pro-review-browser-setup --open-login
 pro-review-browser-setup --mark-logged-in
 ```
 
+未ログインのまま `pro-review-run --pro` を実行した場合も、`FALLBACK:login required` を出したうえで専用 Chrome のログイン画面を自動で開く。
+ブラウザ上のログイン、ログイン後の Chrome close、`pro-review-browser-setup --mark-logged-in` は人間が行う。
+
 ログイン後は、その専用 Chrome ウィンドウを閉じてから Path A を実行する。
 同じ profile を開いたままだと nodriver が profile lock で起動できない。
 
-Path B を使うなら、`SETUP-layer2.md` の tunnel-client 設定も行う。
+Path B を使うなら、`SETUP-layer2.md` の tunnel-client 設定と ChatGPT 側 connector 登録も行う。
 
 ## Path A: 5.5Pro
 
@@ -65,12 +68,16 @@ pro-review-run --thinking \
   --repo /path/to/repo \
   --project my-review \
   --question "bug と security を見て"
-
-pro-review-tunnel
-pro-review-tunnel-check my-review
 ```
 
-ChatGPT 側では、送信前に Developer Mode と pro-review Tunnel connector をこのチャットで有効化してから依頼文を貼る。
+Path B も nodriver で ChatGPT Web を操作する。
+`pro-review-run --thinking` は snapshot 作成、tunnel 起動、`pro-review-tunnel-check`、固定ラベルの connector 選択、依頼文送信、watch、finish まで行う。
+
+ChatGPT 側では、事前に Developer Mode と pro-review Tunnel connector を登録しておく。
+実行時は nodriver が `pro-review Tunnel connector` をこのチャットで選択してから依頼文を送る。
+connector 名が違う場合は `--connector-label "..."` を付ける。
+connector 作成・初回認可・MFA・管理者権限付与は人間操作のまま。
+
 ChatGPT は `search` / `fetch` で読み、`save_report` で保存する。
 `search` / `fetch` / `save_report` が見えない場合はレビューせず、`STOP_REASON=connector_unavailable` が出る。
 

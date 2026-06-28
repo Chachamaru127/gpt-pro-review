@@ -27,6 +27,23 @@ assert_eq "3" "$FB_RC" "T1 missing fixture fallback"
 assert_contains "$FB_OUT" "FALLBACK" "T1 fallback emitted"
 assert_contains "$FB_OUT" "manual_save:" "T1 manual fallback command"
 
+TMP_HOME=$(mktemp -d -t prr-browser-run-home-XXXXXX)
+mkdir -p "$TMP_HOME/.claude/skills"
+ln -s "$(cd "$SCRIPT_DIR/.." && pwd)" "$TMP_HOME/.claude/skills/gpt-pro-review"
+LIVE_REPO=$(mkrepo)
+(cd "$LIVE_REPO" && echo "LIVE" >> calc.py)
+set +e
+LOGIN_OUT=$(HOME="$TMP_HOME" PRO_REVIEW_OPEN_LOGIN_DRY_RUN=1 "$RUN" "$LIVE_REPO" "$PROJECT-auto-login" --question "find bugs" --timeout 0.1 2>/tmp/prr-browser-run-login-$$.err)
+LOGIN_RC=$?
+set -e
+assert_eq "3" "$LOGIN_RC" "T1b missing live login marker fallback"
+assert_contains "$LOGIN_OUT" "FALLBACK:login required" "T1b login fallback emitted"
+assert_contains "$LOGIN_OUT" "login_action: open-login attempted" "T1b login browser open attempted"
+assert_contains "$LOGIN_OUT" "login_next:" "T1b login next action emitted"
+assert_contains "$LOGIN_OUT" "login_rerun:" "T1b rerun command emitted"
+assert_contains "$(cat /tmp/prr-browser-run-login-$$.err)" "MANUAL login" "T1b setup guidance emitted"
+rm -f /tmp/prr-browser-run-login-$$.err
+
 cat > "$FIXTURE" <<EOF
 <div data-message-author-role="assistant">
   <p>結論: Path A fixture OK</p>
@@ -49,5 +66,6 @@ RUN_ID=$(printf '%s\n' "$OUT" | awk '/^run_id:/{print $2; exit}')
 assert_contains "$(cat "$REPORT")" "[[DONE-$RUN_ID]]" "T2 report marker"
 
 cleanup_paths "$REPO" "$HOME/.pro-review/inbox/$PROJECT" "$HOME/.pro-review/reports/$PROJECT" "$HOME/.pro-review/workspace/$PROJECT"
+cleanup_paths "$TMP_HOME" "$LIVE_REPO"
 
 echo "[test-browser-run] PASS"

@@ -24,6 +24,8 @@
 - project:
 - command:
 - tunnel health:
+- connector label:
+- nodriver send:
 - run_id:
 - save_report result:
 - reply path:
@@ -52,8 +54,10 @@
 - repo: temporary clean fixture repo (`calc.py` zero-division bug)
 - project: `gpt-pro-review-pathb-live-1782321000`
 - run_id: `1782321001240-edc4c5`
-- command: `scripts/pro-review-run --thinking <...>` then `scripts/pro-review-tunnel-check <project>` and browser send
+- command: `scripts/pro-review-run --thinking <...>` then browser/nodriver connector send
 - tunnel health: `OK tunnel_lifecycle`, `TOOLS=search,fetch,save_report`
+- connector label: not selected
+- nodriver send: not in this older smoke
 - save_report result: not observed
 - reply path: none
 - report bundle: none

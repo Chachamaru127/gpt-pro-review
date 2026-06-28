@@ -179,4 +179,44 @@ OUT=$("$DRV" --fixture-html "$SUCCESS" --run-id "$RID" --deep-research on)
 assert_exit_ok "$?" "T10 fixture accepts deep research flag"
 assert_contains "$OUT" "[[DONE-$RID]]" "T10 fixture still extracts marker"
 
+CONN="$TMP/connector.html"
+cat > "$CONN" <<'EOF'
+<main>
+  <button id="composer-plus-btn" aria-label="Tools">+</button>
+  <div role="menuitemcheckbox" aria-checked="true" aria-label="pro-review Tunnel connector">pro-review Tunnel connector</div>
+  <div id="prompt-textarea" contenteditable="true"></div>
+  <button data-testid="send-button" aria-label="Send message">Send</button>
+</main>
+EOF
+OUT=$("$DRV" --fixture-html "$CONN" --mode connector --send-only --request-file "$REQ" --run-id "$RID" --connector-label "pro-review Tunnel connector")
+assert_exit_ok "$?" "T11 connector fixture send"
+assert_contains "$OUT" "sent: connector" "T11 connector sent line"
+assert_contains "$OUT" "connector_label: pro-review Tunnel connector" "T11 connector label line"
+
+NO_CONN="$TMP/no-connector.html"
+cat > "$NO_CONN" <<'EOF'
+<main>
+  <button id="composer-plus-btn" aria-label="Tools">+</button>
+  <div id="prompt-textarea" contenteditable="true"></div>
+</main>
+EOF
+set +e
+OUT=$("$DRV" --fixture-html "$NO_CONN" --mode connector --send-only --request-file "$REQ" --run-id "$RID" --connector-label "pro-review Tunnel connector" 2>/dev/null)
+RC=$?
+set -e
+assert_eq "3" "$RC" "T12 connector missing stops"
+assert_contains "$OUT" "STOP_REASON=connector_unavailable" "T12 connector stop reason"
+
+python3 - "$DRV" <<'PY'
+import importlib.machinery
+import sys
+mod = importlib.machinery.SourceFileLoader("pro_review_browser_drive_connector", sys.argv[1]).load_module()
+src = open(sys.argv[1], encoding="utf-8").read()
+assert mod.DEFAULT_CONNECTOR_LABEL == "pro-review Tunnel connector"
+assert "select_connector_mode" in src
+assert "STOP_REASON=connector_unavailable" in src
+assert "--send-only" in src
+PY
+assert_exit_ok "$?" "T13 connector mode source contract"
+
 echo "[test-browser-drive] PASS"

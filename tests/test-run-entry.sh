@@ -33,14 +33,24 @@ assert_contains "$(cat "$REQ")" 'web_search: `off`' "T1 --pro web search forward
 assert_contains "$(cat "$REQ")" 'deep_research: `on`' "T1 --pro deep research forwarded"
 
 PROJ2="entry-thinking-$$"
-OUT2=$("$RUN" --thinking --repo "$REPO" --project "$PROJ2" --question "find bugs")
+CONN_FIXTURE="$TMP/connector.html"
+cat > "$CONN_FIXTURE" <<'EOF'
+<main>
+  <button id="composer-plus-btn" aria-label="Tools">+</button>
+  <div role="menuitemcheckbox" aria-checked="true" aria-label="pro-review Tunnel connector">pro-review Tunnel connector</div>
+  <div id="prompt-textarea" contenteditable="true"></div>
+  <button data-testid="send-button" aria-label="Send message">Send</button>
+</main>
+EOF
+OUT2=$("$RUN" --thinking --repo "$REPO" --project "$PROJ2" --question "find bugs" --fixture-html "$CONN_FIXTURE" --timeout 5 --drive-timeout 1)
 assert_exit_ok "$?" "T2 --thinking exit"
-assert_contains "$OUT2" "save_report" "T2 thinking prompt save_report"
-assert_contains "$OUT2" "Tunnel connector" "T2 thinking prompt connector gate"
-assert_contains "$OUT2" "STOP_REASON=connector_unavailable" "T2 thinking prompt connector stop"
-assert_contains "$OUT2" "next_tunnel:" "T2 next tunnel"
-assert_contains "$OUT2" "next_check:" "T2 next check"
-assert_contains "$OUT2" "next_watch:" "T2 next watch"
+assert_contains "$OUT2" "sent: connector" "T2 thinking nodriver connector send"
+assert_contains "$OUT2" "REPLY:" "T2 thinking watch reply"
+assert_contains "$OUT2" "report_bundle:" "T2 thinking finish bundle"
+REQ2=$(printf '%s\n' "$OUT2" | awk '/^request_file:/{print $2; exit}')
+assert_contains "$(cat "$REQ2")" "save_report" "T2 thinking request save_report"
+assert_contains "$(cat "$REQ2")" "Tunnel connector" "T2 thinking request connector gate"
+assert_contains "$(cat "$REQ2")" "STOP_REASON=connector_unavailable" "T2 thinking request connector stop"
 
 set +e
 ERR=$("$RUN" --repo "$REPO" 2>&1 >/dev/null)
@@ -57,7 +67,7 @@ assert_exit_nonzero "$RC" "T4 thinking rejects Path A tool policy"
 assert_contains "$ERR" "Path A (--pro) options" "T4 thinking policy guidance"
 
 cleanup_paths "$REPO" "$HOME/.pro-review/inbox/$PROJ" "$HOME/.pro-review/reports/$PROJ" "$HOME/.pro-review/workspace/$PROJ" \
-  "$HOME/.pro-review/inbox/$PROJ2" "$HOME/.pro-review/workspace/$PROJ2" \
+  "$HOME/.pro-review/inbox/$PROJ2" "$HOME/.pro-review/reports/$PROJ2" "$HOME/.pro-review/workspace/$PROJ2" \
   "$HOME/.pro-review/inbox/entry-thinking-policy-$$" "$HOME/.pro-review/workspace/entry-thinking-policy-$$"
 
 echo "[test-run-entry] PASS"

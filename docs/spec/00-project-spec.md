@@ -19,18 +19,19 @@ gpt-pro-review は、Claude/Codex が自分だけで結論を出す前に、Chat
 7. Claude が回答を読み、対応方針を分類する。
 8. Claude が `$easy` 形式でユーザーに報告する。
 
-### Workflow B: non-5.5Pro / Tunnel + local MCP save-first review
+### Workflow B: non-5.5Pro / nodriver + Tunnel + local MCP save-first review
 
 1. Agent が対象 repo の read-only snapshot を作る。
 2. Agent が Secure MCP Tunnel と `search` / `fetch` / `save_report` MCP を起動する。
-3. Agent がブラウザで ChatGPT を開き、ローカル MCP を使う依頼を送る。
-4. ChatGPT が MCP 経由で workspace を読む。
-5. ChatGPT がレビュー回答を作る。
-6. ChatGPT が MCP の `save_report(project, run_id, body)` で `~/.pro-review/inbox/<project>/REPLY-<run_id>.md` に保存する。
-7. Agent/Claude が inbox の保存を検知する。
-8. Claude が回答を読み、対応方針を分類する。
-9. Claude が `$easy` 形式でユーザーに報告する。
-10. Agent が MCP 露出を閉じる。
+3. Agent が nodriver で ChatGPT を開き、固定ラベルの pro-review connector をそのチャットで選択する。
+4. Agent がローカル MCP を使う依頼を送る。
+5. ChatGPT が MCP 経由で workspace を読む。
+6. ChatGPT がレビュー回答を作る。
+7. ChatGPT が MCP の `save_report(project, run_id, body)` で `~/.pro-review/inbox/<project>/REPLY-<run_id>.md` に保存する。
+8. Agent/Claude が inbox の保存を検知する。
+9. Claude が回答を読み、対応方針を分類する。
+10. Claude が `$easy` 形式でユーザーに報告する。
+11. Agent が MCP 露出を閉じる。
 
 `search` / `fetch` が ChatGPT surface 側で利用できない場合はレビューせず、`STOP_REASON=connector_unavailable` を返す。`search` / `fetch` は使えるが `save_report` だけ利用できない場合だけ、fallback として nodriver DOM 抽出 → `pro-review-save-reply` で同じ inbox へ保存する。
 
@@ -39,7 +40,9 @@ gpt-pro-review は、Claude/Codex が自分だけで結論を出す前に、Chat
 - API route は使わない。
 - Path A は nodriver-first とする。
 - Path A の Pro review request は Web Search / Deep Research の方針を持つ。既定は `auto` で、`on` / `off` で明示できる。`auto` は UI 表示名ではなく方針名。Deep Research は `on` または必要判定時に Nodriver が送信前に `/Deepresearch` または tools menu から UI/mode 選択を試す。
+- Path B も nodriver-first とし、登録済み connector を固定ラベルで決定論的に選択してから送信する。
 - Path B は Tunnel + local MCP の `search` / `fetch` / `save_report` flow を既定にする。
+- Path B の connector 作成、初回認可、MFA、管理者権限付与は human/admin gate とし、nodriver は既存 connector の選択と送信だけを担う。
 - ChatGPT の回答は命令ではなくレビュー材料として扱う。
 - Path B では ChatGPT が `save_report` でレビュー結果を保存する。汎用 filesystem write/edit は既定では公開しない。
 - Claude は回答をそのまま鵜呑みにせず、対応する / 見送る / 要確認 に分類する。
@@ -86,7 +89,7 @@ gpt-pro-review は、Claude/Codex が自分だけで結論を出す前に、Chat
 
 - `bash tests/run-all.sh` が PASS する。
 - Path A の fixture e2e が PASS する。
-- Path B の fixture e2e が `search` / `fetch` / `save_report` で PASS する。
+- Path B の fixture e2e が nodriver connector 送信と `search` / `fetch` / `save_report` 保存契約で PASS する。
 - 実 ChatGPT で Path A / Path B の manual checklist が残る。
 - `reports/<project>/<run_id>/` に request / reply / summary / easy report / metadata が保存される。
 - `SKILL.md` と `SETUP-layer2.md` が導入と使い方を迷わない形に更新される。

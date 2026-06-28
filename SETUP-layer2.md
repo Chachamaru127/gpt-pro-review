@@ -19,7 +19,7 @@
 ## 構成図
 
 ```
-ChatGPT Thinking-High (開発者モード, Connector=Tunnel)
+ChatGPT Thinking-High (nodriver操作, 開発者モード, Connector=Tunnel)
         │  outbound HTTPS
    OpenAI Secure MCP Tunnel
         │
@@ -53,23 +53,29 @@ ChatGPT Thinking-High (開発者モード, Connector=Tunnel)
    - ChatGPT Web 版で **開発者モード** ON（設定 → アプリ → 詳細設定 → Developer Mode）
    - コネクタを追加 → **Tunnel モード** → 同じ `tunnel_id` を登録
    - Authentication は **No / Mixed** どちらでも可（最小権限なので無認証で OK）
+   - connector の表示名は既定で `pro-review Tunnel connector` にする。違う名前にする場合は実行時に `--connector-label` を指定する。
 
 ## 起動と利用
 
 ```bash
-# 1. Path B の依頼文を作る
+# Path B を実行する（snapshot -> tunnel -> nodriver connector送信 -> watch -> finish）
 pro-review-run --thinking --repo /path/to/repo --project my-project --question "bug と security を見て"
-
-# 2. トンネル起動（run_in_background 推奨）
-pro-review-tunnel
-
-# 3. 状態確認
-pro-review-tunnel-check my-project
 ```
 
-ChatGPT 側で非 5.5Pro の MCP 利用可能モデルに切替、pro-review コネクタを有効化。`search("") → fetch(id) → save_report(project, run_id, body)` の依頼文（`pro-review-start` が生成する）を貼って送信。
+`pro-review-run --thinking` は `pro-review-tunnel` と `pro-review-tunnel-check` を内部で実行する。
+その後 nodriver で ChatGPT を開き、`pro-review Tunnel connector` をこのチャットで選択してから依頼文を送る。
 
-この有効化は「登録済み connector がある」だけでは足りない。送信するチャットで Developer Mode と pro-review Tunnel connector が選択されている必要がある。`search` / `fetch` / `save_report` が tool として見えない場合、ChatGPT はレビューを推測せず `STOP_REASON=connector_unavailable` と `NEXT_ACTION=ChatGPT側でpro-review Tunnel connectorを有効化` を返す。
+ChatGPT 側で非 5.5Pro の MCP 利用可能モデルに切替できること、登録済み pro-review コネクタがあることは前提。
+connector 作成、初回認可、MFA、管理者権限付与は人間/管理者作業のまま。
+connector 名が違う場合は次のように指定する。
+
+```bash
+pro-review-run --thinking --repo /path/to/repo --project my-project \
+  --connector-label "Your Connector Name" \
+  --question "bug と security を見て"
+```
+
+この有効化は「登録済み connector がある」だけでは足りない。送信するチャットで Developer Mode と pro-review Tunnel connector が選択されている必要がある。nodriver が固定ラベルを見つけられない場合は送信せず `STOP_REASON=connector_unavailable` と `NEXT_ACTION=ChatGPT側でpro-review Tunnel connectorを有効化` を返す。ChatGPT 側で `search` / `fetch` / `save_report` が tool として見えない場合も、ChatGPT はレビューを推測せず同じ stop reason を返す。
 
 ## 返信の回収方法
 

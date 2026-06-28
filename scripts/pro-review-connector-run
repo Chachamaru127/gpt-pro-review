@@ -1,0 +1,159 @@
+#!/usr/bin/env bash
+# Path B lifecycle:
+#   start -> tunnel/check -> browser-drive(connector send) -> watch -> finish
+#
+# ChatGPT connector/app creation itself remains a human/admin setup step. This
+# script deterministically selects an already-available connector by label.
+set -euo pipefail
+umask 077
+
+usage() {
+  cat >&2 <<EOF
+usage: pro-review-connector-run <repo> [project] [--mode review|research|implement] [--question "..."] [--timeout sec] [--drive-timeout sec] [--connector-label "..."] [--fixture-html page.html]
+EOF
+  exit 2
+}
+
+REPO="${1:-}"; [ -n "$REPO" ] || usage; shift
+PROJECT=""
+MODE="review"
+QUESTION=""
+TIMEOUT="${TIMEOUT:-3600}"
+DRIVE_TIMEOUT="${DRIVE_TIMEOUT:-120}"
+CONNECTOR_LABEL="${PRO_REVIEW_CONNECTOR_LABEL:-pro-review Tunnel connector}"
+FIXTURE_HTML=""
+if [ "${1:-}" ] && [ "${1#--}" = "$1" ]; then PROJECT="$1"; shift; fi
+while [ "${1:-}" ]; do
+  case "$1" in
+    --mode) MODE="${2:-review}"; shift 2;;
+    --question) QUESTION="${2:-}"; shift 2;;
+    --timeout) TIMEOUT="${2:-3600}"; shift 2;;
+    --drive-timeout) DRIVE_TIMEOUT="${2:-120}"; shift 2;;
+    --connector-label) CONNECTOR_LABEL="${2:-}"; shift 2;;
+    --fixture-html) FIXTURE_HTML="${2:-}"; shift 2;;
+    *) usage;;
+  esac
+done
+case "$MODE" in review|research|implement) ;; *) echo "[error] --mode must be review|research|implement" >&2; exit 2;; esac
+[ -n "$CONNECTOR_LABEL" ] || { echo "[error] --connector-label is required" >&2; exit 2; }
+
+SK="$(cd "$(dirname "$0")" && pwd -P)"
+BASE="$HOME/.pro-review"
+mkdir -p "$BASE"
+chmod 700 "$BASE" 2>/dev/null || true
+
+CLOSED=0
+close_access() {
+  pkill -f 'tunnel-client run --profile pro-review' 2>/dev/null || true
+  : > "$BASE/active-project"
+  CLOSED=1
+  echo "[closed] アクセス遮断: デーモン停止 + active-project 解除" >&2
+}
+cleanup() {
+  if [ "$CLOSED" != "1" ]; then
+    close_access
+  fi
+}
+trap cleanup EXIT INT TERM
+
+maybe_open_login() {
+  local drive_output="$1"
+  if ! printf '%s\n' "$drive_output" | grep -qx 'FALLBACK:login required'; then
+    return 0
+  fi
+  echo "[pro-review-connector-run] login required; opening dedicated ChatGPT login browser" >&2
+  local setup_out setup_rc
+  set +e
+  setup_out=$("$SK/pro-review-browser-setup" --open-login 2>&1)
+  setup_rc=$?
+  set -e
+  printf '%s\n' "$setup_out" >&2
+  echo "login_action: open-login attempted"
+  echo "login_setup_exit: $setup_rc"
+  echo "login_next: log in in the opened browser, close that Chrome window, then run: pro-review-browser-setup --mark-logged-in"
+  printf 'login_rerun: pro-review-run --thinking --repo %q --project %q --mode %q' "$REPO" "$PROJECT_NAME" "$MODE"
+  [ -n "$QUESTION" ] && printf ' --question %q' "$QUESTION"
+  printf ' --connector-label %q\n' "$CONNECTOR_LABEL"
+}
+
+START_ARGS=("$REPO")
+[ -n "$PROJECT" ] && START_ARGS+=("$PROJECT")
+START_ARGS+=(--mode "$MODE")
+[ -n "$QUESTION" ] && START_ARGS+=(--question "$QUESTION")
+
+START_OUT=$("$SK/pro-review-start" "${START_ARGS[@]}")
+PROJECT_NAME=$(printf '%s\n' "$START_OUT" | awk '/^project_name:/{print $2; exit}')
+INBOX=$(printf '%s\n' "$START_OUT" | awk '/^inbox:/{print $2; exit}')
+SINCE=$(printf '%s\n' "$START_OUT" | awk '/^since:/{print $2; exit}')
+RUN_ID=$(printf '%s\n' "$START_OUT" | awk '/^run_id:/{print $2; exit}')
+REQ=$(printf '%s\n' "$START_OUT" | awk '/^request_file:/{print $2; exit}')
+[ -n "$PROJECT_NAME" ] && [ -n "$INBOX" ] && [ -n "$SINCE" ] && [ -n "$RUN_ID" ] && [ -n "$REQ" ] \
+  || { echo "[error] pro-review-start output missing machine-readable fields" >&2; exit 1; }
+
+echo "project_name: $PROJECT_NAME"
+echo "mode: $MODE"
+echo "since: $SINCE"
+echo "run_id: $RUN_ID"
+echo "inbox: $INBOX"
+echo "request_file: $REQ"
+echo "connector_label: $CONNECTOR_LABEL"
+
+if [ -z "$FIXTURE_HTML" ]; then
+  if pgrep -f 'tunnel-client run --profile pro-review' >/dev/null 2>&1; then
+    pkill -f 'tunnel-client run --profile pro-review' 2>/dev/null || true
+    sleep 1
+  fi
+  ("$SK/pro-review-tunnel" 2>&1 | "$SK/pro-review-redact-log" > "$BASE/daemon.log") &
+  DPID=$!
+  chmod 600 "$BASE/daemon.log" 2>/dev/null || true
+  sleep 3
+  if ! kill -0 "$DPID" 2>/dev/null; then
+    echo "STOP_REASON=tunnel_not_running"
+    echo "NEXT_ACTION=run pro-review-doctor and inspect $BASE/daemon.log"
+    exit 3
+  fi
+  set +e
+  CHECK_OUT=$("$SK/pro-review-tunnel-check" "$PROJECT_NAME" 2>&1)
+  CHECK_RC=$?
+  set -e
+  printf '%s\n' "$CHECK_OUT"
+  if [ "$CHECK_RC" -ne 0 ]; then
+    exit "$CHECK_RC"
+  fi
+else
+  echo "tunnel_fixture: skipped"
+fi
+
+DRIVE_ARGS=(--mode connector --send-only --run-id "$RUN_ID" --request-file "$REQ" --timeout "$DRIVE_TIMEOUT" --connector-label "$CONNECTOR_LABEL")
+[ -n "$FIXTURE_HTML" ] && DRIVE_ARGS+=(--fixture-html "$FIXTURE_HTML")
+
+set +e
+DRIVE_OUT=$("$SK/pro-review-browser-drive" "${DRIVE_ARGS[@]}" 2> >(cat >&2))
+DRIVE_RC=$?
+set -e
+if [ "$DRIVE_RC" -eq 3 ]; then
+  printf '%s\n' "$DRIVE_OUT"
+  maybe_open_login "$DRIVE_OUT"
+  exit 3
+elif [ "$DRIVE_RC" -ne 0 ]; then
+  exit "$DRIVE_RC"
+fi
+printf '%s\n' "$DRIVE_OUT"
+
+if [ -n "$FIXTURE_HTML" ]; then
+  printf 'fixture connector sent\n[[DONE-%s]]' "$RUN_ID" | "$SK/pro-review-save-reply" "$PROJECT_NAME" "$RUN_ID" >/dev/null
+fi
+
+if W_OUT=$("$SK/pro-review-watch" "$INBOX" --run-id "$RUN_ID" --since "$((SINCE - 1))" --timeout "$TIMEOUT" --interval 3 --stable 0.1 2>/dev/null); then
+  echo "$W_OUT"
+  REPLY=$(printf '%s\n' "$W_OUT" | awk '/^REPLY:/{print $2; exit}')
+  F_OUT=$(PRO_REVIEW_REPORT_MODE=path-b PRO_REVIEW_REPORT_SINCE="$SINCE" "$SK/pro-review-finish" "$PROJECT_NAME" "$REPLY" 2>&1)
+  CLOSED=1
+  echo "$F_OUT"
+else
+  echo "STOP_REASON=save_report_timeout"
+  echo "NEXT_ACTION=confirm ChatGPT called save_report(project, run_id, body)"
+  "$SK/pro-review-finish" "$PROJECT_NAME" >/dev/null 2>&1 || true
+  CLOSED=1
+  exit 3
+fi

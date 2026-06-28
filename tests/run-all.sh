@@ -12,6 +12,7 @@ TESTS=(
   "test-browser-setup.sh"
   "test-browser-drive.sh"
   "test-browser-run.sh"
+  "test-connector-run.sh"
   "test-search-fetch.sh"
   "test-mcp-hardening.sh"
   "test-full-gate.sh"
