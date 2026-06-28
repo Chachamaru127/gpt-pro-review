@@ -90,13 +90,21 @@ def connector_unavailable(label, detail=""):
 
 def validate_reply(text, run_id):
     marker = f"[[DONE-{run_id}]]"
-    lines = text.splitlines()
-    if not lines:
+    if not text.strip():
         raise ValueError("assistant reply is empty")
-    if lines[-1] != marker:
-        raise ValueError(f"final line must be exactly {marker}")
     if text.count(marker) != 1:
         raise ValueError("DONE marker must appear exactly once on the final line")
+    # DOM 抽出は末尾に空行やコードフェンス(```)が付きやすい。マーカーが
+    # 「最後の内容行」であれば完了とみなす。末尾の空行・フェンス行は無視し、
+    # マーカー行自体は前後の空白とバッククォート(`)を剥がして一致判定する。
+    lines = [ln.rstrip() for ln in text.splitlines()]
+    while lines and (lines[-1] == "" or lines[-1].lstrip("`").strip() == ""):
+        lines.pop()
+    if not lines:
+        raise ValueError("assistant reply is empty")
+    last = lines[-1].strip().strip("`").strip()
+    if last != marker:
+        raise ValueError(f"final line must be {marker}")
     return text
 
 
@@ -670,6 +678,28 @@ async def wait_for_chat_input(page, timeout):
     return None, None
 
 
+# send_keys は1文字ずつ入力するため、巨大な依頼文では実質ハングする。
+# fill_prompt(JS注入)失敗時の最後の手段としてのみ、この上限以下で使う。
+SEND_KEYS_MAX_CHARS = 2000
+
+# 入力欄に実際に入った文字数を読む。fill_prompt の返り値型が環境差で
+# dict にならない場合でも、DOM 実体で注入成功を確認するために使う。
+PROMPT_LENGTH_JS = """
+(() => {
+  const selectors = [
+    '#prompt-textarea',
+    'textarea',
+    "div[contenteditable='true']",
+    "[data-testid='composer-text-input']",
+    '.ProseMirror'
+  ];
+  const el = selectors.map(s => document.querySelector(s)).find(Boolean);
+  if (!el) return { ok: false, length: 0 };
+  return { ok: true, length: (el.value || el.textContent || '').length };
+})()
+"""
+
+
 async def fill_prompt(page, request_text):
     payload = json.dumps(request_text)
     script = f"""
@@ -851,10 +881,21 @@ async def drive_live(args):
                 selector, editor = await wait_for_chat_input(page, min(args.timeout, 30))
                 if not editor:
                     return fallback("composer not found after deep research selection")
-        result = await fill_prompt(page, request_text)
-        if not isinstance(result, dict) or not result.get("ok"):
-            await editor.click()
-            await editor.send_keys(request_text)
+        # fill_prompt の返り値は環境差で生 dict にならないことがあるため js_object で正規化する。
+        # 正規化せず isinstance(result, dict) で判定すると、注入は成功しているのに
+        # フォールバックの send_keys に落ち、98KB級の依頼文を1文字ずつ打って固まる。
+        result = js_object(await fill_prompt(page, request_text))
+        if not (result and result.get("ok")):
+            # 返り値が曖昧でも、DOM に実際に入っていれば送信に進む（再入力しない）。
+            verify = js_object(await js(page, PROMPT_LENGTH_JS)) or {}
+            filled = int(verify.get("length") or 0)
+            if filled < min(len(request_text), 64):
+                # 本当に空のときだけ入力を試みる。巨大依頼は send_keys せず fallback。
+                if len(request_text) <= SEND_KEYS_MAX_CHARS:
+                    await editor.click()
+                    await editor.send_keys(request_text)
+                else:
+                    return fallback("prompt injection failed (request too large to type)")
         if not await click_send(page, 15):
             return fallback("send button not found")
         if args.send_only:

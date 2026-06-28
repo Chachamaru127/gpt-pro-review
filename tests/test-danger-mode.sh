@@ -98,6 +98,16 @@ RC6=$?
 set -e
 assert_eq "2" "$RC6" "T6 bad arg exit 2"
 
+# ---- T7: PRO_REVIEW_FORCE_SCAN=1 は marker(ON) より優先して scan を強制する ----
+HOME="$TMP_HOME" "$TOGGLE" --on >/dev/null 2>&1
+set +e
+OUT7=$(HOME="$TMP_HOME" PRO_REVIEW_FORCE_SCAN=1 "$SNAP" "$REPO" danger-force 2>&1)
+RC7=$?
+set -e
+assert_eq "1" "$RC7" "T7 force-scan overrides danger marker (blocks)"
+assert_contains "$OUT7" "公開を中止" "T7 force-scan block message"
+HOME="$TMP_HOME" "$TOGGLE" --off >/dev/null 2>&1
+
 cleanup_paths "$REPO" "$REPO5" \
   "$TMP_HOME/.pro-review/workspace/danger-default" "$TMP_HOME/.pro-review/workspace/danger-env" \
   "$TMP_HOME/.pro-review/workspace/danger-marker" "$TMP_HOME/.pro-review/workspace/danger-off"

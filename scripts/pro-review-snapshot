@@ -54,7 +54,12 @@ rm -f "$WS/.pro-review-source" 2>/dev/null || true  # 旧版が workspace 内に
 #   - PRO_REVIEW_DANGER_MODE=1      （per-call の明示）
 #   - ~/.pro-review/danger-mode 在  （この環境の恒久トグル: pro-review-danger-mode --on）
 secrets_allowed() {
+  # precedence: 明示の per-call bypass > 強制 scan > 恒久 bypass(env/marker)。
+  # ALLOW_SECRETS=1 はこのコールを明示的に bypass する最優先。
   [ "${ALLOW_SECRETS:-}" = "1" ] && return 0
+  # PRO_REVIEW_FORCE_SCAN=1 は恒久バイパス(danger marker / DANGER_MODE)を無効化して
+  # 標準の安全挙動に戻す（danger 常時 ON 環境で、この実行だけ scan を効かせたい時）。
+  [ "${PRO_REVIEW_FORCE_SCAN:-}" = "1" ] && return 1
   [ "${PRO_REVIEW_DANGER_MODE:-}" = "1" ] && return 0
   [ -f "$HOME/.pro-review/danger-mode" ] && return 0
   return 1

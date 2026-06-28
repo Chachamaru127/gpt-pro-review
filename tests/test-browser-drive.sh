@@ -169,6 +169,21 @@ remote = Obj()
 remote.deep_serialized_value = Obj()
 remote.deep_serialized_value.value = [["ok", {"type": "boolean", "value": True}], ["label", {"type": "string", "value": "Deep Research"}]]
 assert mod.js_object(remote) == {"ok": True, "label": "Deep Research"}
+# validate_reply tolerance: DOM抽出の末尾ゆらぎ(空行/コードフェンス/バッククォート/末尾空白)を
+# 許容しつつ、マーカーが最終内容行であることの完了検知は維持する。
+_rid = "1700000000123-aabbcc"
+_M = f"[[DONE-{_rid}]]"
+assert mod.validate_reply(f"x\n{_M}", _rid)
+assert mod.validate_reply(f"x\n{_M}\n\n", _rid)
+assert mod.validate_reply(f"x\n```\n{_M}\n```", _rid)
+assert mod.validate_reply(f"x\n`{_M}`", _rid)
+assert mod.validate_reply(f"x\n{_M}   ", _rid)
+for _bad in (f"{_M}\nstill going", "no marker here", f"{_M}\nx\n{_M}"):
+    try:
+        mod.validate_reply(_bad, _rid)
+    except ValueError:
+        continue
+    raise AssertionError("validate_reply should reject: " + repr(_bad))
 src = open(sys.argv[1], encoding="utf-8").read()
 assert "deepreseach" in src
 assert "composer-plus-btn" in src

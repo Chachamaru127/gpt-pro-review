@@ -61,12 +61,28 @@ EMBED_ARGS+=(--web-search "$WEB_SEARCH" --deep-research "$DEEP_RESEARCH")
 EMBED_ARGS+=(--no-clip)
 
 EMBED_OUT=$("$SK/pro-review-browser-embed" "${EMBED_ARGS[@]}")
-PROJECT=$(printf '%s\n' "$EMBED_OUT" | awk '/^project_name:/{print $2; exit}')
-SINCE=$(printf '%s\n' "$EMBED_OUT" | awk '/^since:/{print $2; exit}')
-RUN_ID=$(printf '%s\n' "$EMBED_OUT" | awk '/^run_id:/{print $2; exit}')
-INBOX=$(printf '%s\n' "$EMBED_OUT" | awk '/^inbox:/{print $2; exit}')
-REQ=$(printf '%s\n' "$EMBED_OUT" | awk '/^request_file:/{print $2; exit}')
-DEEP_RESEARCH=$(printf '%s\n' "$EMBED_OUT" | awk '/^deep_research:/{print $2; exit}')
+# 機械可読フィールドを1回のawkで抽出する。
+# 注意: `printf '%s' "$EMBED_OUT" | awk '...{exit}'` は、EMBED_OUT が OS の pipe バッファ
+# (~64KB) を超えると、awk の早期 exit で書き込み中の printf が SIGPIPE(141) を受け、
+# pipefail 下でスクリプト全体が exit 141 で死ぬ。embed packet は数十KB(既定上限 80KB)に
+# なり得るため、pipe を使わず、early-exit なしの単一パス + process substitution で取り出す。
+# header 行が body より先に出るので、各キーは first-occurrence(先勝ち)で header を拾う。
+{
+  IFS= read -r PROJECT
+  IFS= read -r SINCE
+  IFS= read -r RUN_ID
+  IFS= read -r INBOX
+  IFS= read -r REQ
+  IFS= read -r DEEP_RESEARCH
+} < <(awk '
+  /^project_name:/ && pj=="" { pj=$2 }
+  /^since:/        && sc=="" { sc=$2 }
+  /^run_id:/       && ri=="" { ri=$2 }
+  /^inbox:/        && ib=="" { ib=$2 }
+  /^request_file:/ && rq=="" { rq=$2 }
+  /^deep_research:/&& dr=="" { dr=$2 }
+  END { print pj; print sc; print ri; print ib; print rq; print dr }
+' <<<"$EMBED_OUT")
 
 [ -n "$PROJECT" ] && [ -n "$SINCE" ] && [ -n "$RUN_ID" ] && [ -n "$INBOX" ] && [ -n "$REQ" ] && [ -n "$DEEP_RESEARCH" ] \
   || { echo "[error] browser-embed output missing machine-readable fields" >&2; exit 1; }

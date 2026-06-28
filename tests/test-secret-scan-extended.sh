@@ -6,6 +6,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=_assert.sh
 source "$SCRIPT_DIR/_assert.sh"
 
+# 操作者の danger mode(secret scan 恒久バイパス)に影響されず、scan 既定挙動を検証する
+export PRO_REVIEW_FORCE_SCAN=1
+
 BUILD="$SCRIPT_DIR/../scripts/build-review-packet"
 [ -x "$BUILD" ] || _fail "build-review-packet not executable at $BUILD"
 

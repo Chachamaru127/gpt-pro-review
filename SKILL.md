@@ -121,7 +121,7 @@ connector 名が違う場合は `--connector-label "..."` を付ける。
 - MCP の既定 tool は `search` / `fetch` / `save_report` だけ。
 - 汎用 `write_file` / `edit_file` / `bash` は既定公開しない。
 - 外部公開前に secret scan を実行し、ヒット時は公開中止する。
-- secret scan のバイパスは Risk Gate。既定 OFF（scan 有効）。誤検知は `ALLOW_SECRETS=1`（per-call）で上書き。`pro-review-danger-mode --on` でこの環境だけ恒久バイパス（マーカー `~/.pro-review/danger-mode`。git 経由で他環境に伝播しない）。バイパスでヒットした時は実行ログに `[danger]` 行で公開対象を必ず出す。
+- secret scan のバイパスは Risk Gate。既定 OFF（scan 有効）。誤検知は `ALLOW_SECRETS=1`（per-call）で上書き。`pro-review-danger-mode --on` でこの環境だけ恒久バイパス（マーカー `~/.pro-review/danger-mode`。git 経由で他環境に伝播しない）。バイパスでヒットした時は実行ログに `[danger]` 行で公開対象を必ず出す。`PRO_REVIEW_FORCE_SCAN=1` は恒久バイパス（marker / `PRO_REVIEW_DANGER_MODE`）を無効化して scan を強制（danger ON 環境でこの実行だけ既定挙動に戻す。同一コールの `ALLOW_SECRETS=1` は優先）。
 - `PRO_REVIEW_FULL=1` は Risk Gate。確認 env なしでは起動しない。
 - `~/.pro-review` は 700、reply/report/log は 600。
 - log は `CONTROL_PLANE_API_KEY`、`sk-...`、cookie らしき値を redaction する。

@@ -65,6 +65,22 @@ assert_contains "$(cat "$REQ")" 'deep_research: `off`' "T2 request deep research
 RUN_ID=$(printf '%s\n' "$OUT" | awk '/^run_id:/{print $2; exit}')
 assert_contains "$(cat "$REPORT")" "[[DONE-$RUN_ID]]" "T2 report marker"
 
+# T3: 大きな embed(>64KB) で printf|awk パースが SIGPIPE(141) で落ちない回帰。
+# ~72KB の無害テキスト(秘密/PII無し)を untracked で置くと packet 本体が pipe バッファを超える。
+BIGREPO=$(mkrepo)
+# pipe を使わず生成(yes|head は pipefail+set -e で SIGPIPE になる)。~70KB(>64KB pipe buffer, <80KB budget)。
+awk 'BEGIN{for(i=0;i<1200;i++) print "alpha beta gamma delta epsilon zeta eta theta iota kappa"}' > "$BIGREPO/big.txt"
+BIGPROJ="browser-run-big-$$"
+set +e
+BIG_OUT=$("$RUN" "$BIGREPO" "$BIGPROJ" --question "find bugs" --fixture-html "$FIXTURE")
+BIG_RC=$?
+set -e
+assert_exit_ok "$BIG_RC" "T3 large embed parses without SIGPIPE (was exit 141)"
+assert_contains "$BIG_OUT" "report_saved:" "T3 large embed completes end-to-end"
+BIG_RUN_ID=$(printf '%s\n' "$BIG_OUT" | awk '/^run_id:/{print $2; exit}')
+assert_contains "$BIG_OUT" "run_id: $BIG_RUN_ID" "T3 run_id parsed from large embed"
+cleanup_paths "$BIGREPO" "$HOME/.pro-review/inbox/$BIGPROJ" "$HOME/.pro-review/reports/$BIGPROJ" "$HOME/.pro-review/workspace/$BIGPROJ"
+
 cleanup_paths "$REPO" "$HOME/.pro-review/inbox/$PROJECT" "$HOME/.pro-review/reports/$PROJECT" "$HOME/.pro-review/workspace/$PROJECT"
 cleanup_paths "$TMP_HOME" "$LIVE_REPO"
 

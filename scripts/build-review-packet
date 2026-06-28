@@ -419,8 +419,12 @@ def secrets_allowed():
       - PRO_REVIEW_DANGER_MODE=1  （per-call の明示）
       - ~/.pro-review/danger-mode 在（この環境の恒久トグル: pro-review-danger-mode --on）
     """
+    # precedence: 明示 per-call bypass > 強制 scan > 恒久 bypass(env/marker)。
     if os.environ.get("ALLOW_SECRETS") == "1":
         return True
+    # PRO_REVIEW_FORCE_SCAN=1 は恒久バイパス(marker/DANGER_MODE)を無効化し標準挙動に戻す。
+    if os.environ.get("PRO_REVIEW_FORCE_SCAN") == "1":
+        return False
     if os.environ.get("PRO_REVIEW_DANGER_MODE") == "1":
         return True
     marker = os.path.join(os.path.expanduser("~"), ".pro-review", "danger-mode")
