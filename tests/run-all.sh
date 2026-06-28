@@ -33,6 +33,7 @@ TESTS=(
   "test-pathA-filename-exclude.sh"
   "test-prompt-injection.sh"
   "test-denylist.sh"
+  "test-danger-mode.sh"
 )
 
 pass=0; fail=0

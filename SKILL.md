@@ -120,6 +120,8 @@ connector 名が違う場合は `--connector-label "..."` を付ける。
 - Path B は snapshot を `~/.pro-review/workspace/<project>/` に作る。
 - MCP の既定 tool は `search` / `fetch` / `save_report` だけ。
 - 汎用 `write_file` / `edit_file` / `bash` は既定公開しない。
+- 外部公開前に secret scan を実行し、ヒット時は公開中止する。
+- secret scan のバイパスは Risk Gate。既定 OFF（scan 有効）。誤検知は `ALLOW_SECRETS=1`（per-call）で上書き。`pro-review-danger-mode --on` でこの環境だけ恒久バイパス（マーカー `~/.pro-review/danger-mode`。git 経由で他環境に伝播しない）。バイパスでヒットした時は実行ログに `[danger]` 行で公開対象を必ず出す。
 - `PRO_REVIEW_FULL=1` は Risk Gate。確認 env なしでは起動しない。
 - `~/.pro-review` は 700、reply/report/log は 600。
 - log は `CONTROL_PLANE_API_KEY`、`sk-...`、cookie らしき値を redaction する。
@@ -131,7 +133,8 @@ pro-review-doctor
 pro-review-tunnel-check <project>
 ```
 
-`doctor` は `OK / FIX / MANUAL` で表示する。
+`doctor` は `OK / WARN / FIX / MANUAL` で表示する。
+`WARN danger_mode ON` は secret scan がこの環境で bypass 中であることを示す。
 秘密値そのものは表示しない。
 
 ## テスト

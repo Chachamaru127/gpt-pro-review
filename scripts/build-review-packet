@@ -412,11 +412,25 @@ def report_denylist_violations(violations):
     for label, source_label, line_num, preview in violations:
         eprint(f"  - {label} matched {source_label} line {line_num} (pattern: {preview})")
 
+def secrets_allowed():
+    """秘密scan を bypass してよいか。既定 False（scan 有効）。
+    次のいずれかで True:
+      - ALLOW_SECRETS=1           （per-call の明示）
+      - PRO_REVIEW_DANGER_MODE=1  （per-call の明示）
+      - ~/.pro-review/danger-mode 在（この環境の恒久トグル: pro-review-danger-mode --on）
+    """
+    if os.environ.get("ALLOW_SECRETS") == "1":
+        return True
+    if os.environ.get("PRO_REVIEW_DANGER_MODE") == "1":
+        return True
+    marker = os.path.join(os.path.expanduser("~"), ".pro-review", "danger-mode")
+    return os.path.isfile(marker)
+
 def report_secret_violations(violations, context):
     eprint(f"✗ 秘密情報の疑いを検出。{context} を中止:")
     for rel, pat in violations:
         eprint(f"  - {rel} (pattern: {pat[:60]})")
-    eprint("  誤検知なら ALLOW_SECRETS=1 を付けて再実行")
+    eprint("  誤検知なら ALLOW_SECRETS=1 / デンジャラスモード(pro-review-danger-mode --on) で再実行")
 
 def append_chatgpt_tool_policy(out, web_search, deep_research):
     """Append ChatGPT Search / Deep Research policy to the review packet."""
@@ -624,7 +638,7 @@ def main():
         budget = args.max_bytes
         omitted = list(diff_excluded)
         secret_violations = []
-        allow_secrets = os.environ.get("ALLOW_SECRETS") == "1"
+        allow_secrets = secrets_allowed()
         for c in changed:
             p = os.path.join(repo, c)
             if not os.path.isfile(p):
@@ -645,11 +659,14 @@ def main():
                 continue
             if b"\x00" in data[:8192]:  # binary skip
                 omitted.append(format_omitted_entry(c, "binary")); continue
-            # secret scan: ALLOW_SECRETS=1 で上書きしない限り、ヒット時は中止
+            # secret scan: bypass(ALLOW_SECRETS/danger-mode)しない限り、ヒット時は中止
             hits = secret_hits(c, data)
             if hits and not allow_secrets:
                 secret_violations.extend(hits)
                 continue  # 後でまとめて報告
+            if hits and allow_secrets:
+                # 無言でバイパスしない: 何を含めるか stderr に出す（Risk Gate の可視性）
+                eprint(f"[danger] secret scan bypassed: {c} を packet に含めます")
             text = data.decode("utf-8", "replace")
             tb = len(data)  # byte 基準（指摘対応）
             if tb > budget:
@@ -695,11 +712,13 @@ def main():
 
     text = "\n".join(out)
 
-    allow_secrets = os.environ.get("ALLOW_SECRETS") == "1"
+    allow_secrets = secrets_allowed()
     final_hits = secret_hits_text("final packet", text)
     if final_hits and not allow_secrets:
         report_secret_violations(final_hits, "packet 出力")
         sys.exit(1)
+    if final_hits and allow_secrets:
+        eprint(f"[danger] secret scan bypassed: final packet に秘密の疑い {len(final_hits)} 件を含めて出力します")
 
     denylist_patterns = load_combined_denylist(repo, is_git, base=args.base)
     if denylist_patterns:

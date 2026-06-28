@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# デンジャラスモードの恒久トグル（この環境だけ・per-environment）。
+#
+# ON にすると、外部公開(ChatGPT)前の secret scan(=Risk Gate)をこの環境で恒久バイパスする。
+# 既定は OFF（scan 有効）。状態は ~/.pro-review/danger-mode マーカーで持つ。
+# マーカーはリポジトリ外なので、git 経由で他環境に伝播しない＝他環境は既定 OFF のまま。
+#
+# 使い方:
+#   pro-review-danger-mode --on       # この環境でバイパスを有効化
+#   pro-review-danger-mode --off      # 解除（scan を再び有効に）
+#   pro-review-danger-mode --status   # 現在の状態（引数なしも同じ）
+set -euo pipefail
+umask 077
+
+BASE="$HOME/.pro-review"
+MARKER="$BASE/danger-mode"
+mkdir -p "$BASE"
+chmod 700 "$BASE" 2>/dev/null || true
+
+ACTION="${1:---status}"
+case "$ACTION" in
+  --on)
+    printf 'enabled-at: %s\nhost: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(hostname 2>/dev/null || echo unknown)" > "$MARKER"
+    chmod 600 "$MARKER" 2>/dev/null || true
+    echo "danger_mode: ON"
+    echo "[warn] secret scan を bypass します。外部(ChatGPT)へ秘密が出る可能性を許容する設定です。" >&2
+    echo "[warn] ヒット時は実行ログに [danger] 行で何を公開対象に含めたか出ます。" >&2
+    echo "解除: pro-review-danger-mode --off"
+    ;;
+  --off)
+    rm -f "$MARKER"
+    echo "danger_mode: OFF (secret scan 有効)"
+    ;;
+  --status|"")
+    if [ -f "$MARKER" ]; then
+      echo "danger_mode: ON (この環境で secret scan を bypass)"
+      sed 's/^/  /' "$MARKER" 2>/dev/null || true
+      echo "  解除: pro-review-danger-mode --off"
+    else
+      echo "danger_mode: OFF (既定; secret scan 有効)"
+    fi
+    ;;
+  *)
+    echo "usage: pro-review-danger-mode [--on|--off|--status]" >&2
+    exit 2
+    ;;
+esac

@@ -13,6 +13,7 @@ line() {
 
 need_fix() { STATUS=1; line "FIX" "$1" "$2"; }
 manual() { line "MANUAL" "$1" "$2"; }
+warn() { line "WARN" "$1" "$2"; }
 ok() { line "OK" "$1" "$2"; }
 
 mkdir -p "$BASE"
@@ -25,7 +26,7 @@ for s in \
   pro-review-browser-setup pro-review-browser-embed pro-review-browser-drive pro-review-browser-run \
   pro-review-mcp pro-review-mcp-search-fetch pro-review-save-reply \
   pro-review-watch pro-review-finish pro-review-summarize \
-  pro-review-tunnel-check pro-review-redact-log; do
+  pro-review-tunnel-check pro-review-redact-log pro-review-danger-mode; do
   if [ -x "$SK/$s" ]; then
     ok "script:$s" "executable"
   else
@@ -63,6 +64,13 @@ if [ -f "$ENVF" ]; then
   grep -q 'CONTROL_PLANE_API_KEY=' "$ENVF" && ok "api_key" "configured" || manual "api_key" "missing"
 else
   manual "env_file" "missing; create ~/.pro-review/env.sh with tunnel id and key"
+fi
+
+DANGER="$BASE/danger-mode"
+if [ -f "$DANGER" ]; then
+  warn "danger_mode" "ON — secret scan は bypass されます (この環境のみ; 解除: pro-review-danger-mode --off)"
+else
+  ok "danger_mode" "OFF — secret scan 有効 (既定)"
 fi
 
 [ "$missing" -eq 0 ] || STATUS=1

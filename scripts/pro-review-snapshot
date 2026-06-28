@@ -48,13 +48,30 @@ rsync -a --delete --safe-links \
 rm -f "$WS/.pro-review-source" 2>/dev/null || true  # 旧版が workspace 内に置いた marker を除去
 
 # secret scan（高signalパターン。検出時は公開中止。誤検知は ALLOW_SECRETS=1 で上書き）
+# デンジャラスモード（恒久バイパス）の判定を一元化する。
+# 既定 OFF（scan 有効）。次のいずれかで bypass:
+#   - ALLOW_SECRETS=1               （per-call の明示）
+#   - PRO_REVIEW_DANGER_MODE=1      （per-call の明示）
+#   - ~/.pro-review/danger-mode 在  （この環境の恒久トグル: pro-review-danger-mode --on）
+secrets_allowed() {
+  [ "${ALLOW_SECRETS:-}" = "1" ] && return 0
+  [ "${PRO_REVIEW_DANGER_MODE:-}" = "1" ] && return 0
+  [ -f "$HOME/.pro-review/danger-mode" ] && return 0
+  return 1
+}
 HITS=$(grep -rIlE '(-----BEGIN [A-Z ]*PRIVATE KEY-----|AKIA[0-9A-Z]{16}|sk-[A-Za-z0-9_-]{20,}|ghp_[A-Za-z0-9]{36}|xox[baprs]-[A-Za-z0-9-]{10,})' "$WS" 2>/dev/null || true)
-if [ -n "$HITS" ] && [ "${ALLOW_SECRETS:-}" != "1" ]; then
-  echo "✗ 秘密情報の疑いを検出。公開を中止:" >&2
-  printf '%s\n' "$HITS" | sed "s|$WS/|  - |" >&2
-  echo "  誤検知なら ALLOW_SECRETS=1 を付けて再実行" >&2
-  chmod -R u+w "$WS" 2>/dev/null || true
-  exit 1
+if [ -n "$HITS" ]; then
+  if secrets_allowed; then
+    # 無言でバイパスしない: 何を外部公開に含めるか毎回 stderr に出す（Risk Gate の可視性）
+    echo "[danger] secret scan bypassed; 以下を外部公開対象に含めます:" >&2
+    printf '%s\n' "$HITS" | sed "s|$WS/|  - |" >&2
+  else
+    echo "✗ 秘密情報の疑いを検出。公開を中止:" >&2
+    printf '%s\n' "$HITS" | sed "s|$WS/|  - |" >&2
+    echo "  誤検知なら ALLOW_SECRETS=1 / デンジャラスモード(pro-review-danger-mode --on) で再実行" >&2
+    chmod -R u+w "$WS" 2>/dev/null || true
+    exit 1
+  fi
 fi
 
 chmod -R a-w "$WS"                                   # workspace を on-disk で read-only に（外部の書込を OS が拒否）
