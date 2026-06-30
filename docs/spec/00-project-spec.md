@@ -39,6 +39,9 @@ gpt-pro-review は、Claude/Codex が自分だけで結論を出す前に、Chat
 
 - API route は使わない。
 - Path A は nodriver-first とする。
+- Path A の入力は packet を `.md` 添付するのを主経路とし（巨大依頼を入力欄に直書きしない）、添付不可時のみ直書きにフォールバックする。
+- Path A の回答取得はコピーボタン→クリップボード(`pbpaste`)を主経路とし、失敗時のみ DOM 抽出にフォールバックする。
+- Path A の生成待ち既定 timeout は Pro の生成時間に合わせて長め（600s）とし、`--timeout` で上書きできる。生成待ちと永続化を分離し、timeout して回答がブラウザに残った場合は `pro-review-recover <project> <run_id>` で最終回答をコピー取得 → marker 検証 → `save-reply` + `finish` まで復旧できる。`pro-review-run --pro` は timeout 時に復旧コマンドを印字する。
 - Path A の Pro review request は Web Search / Deep Research の方針を持つ。既定は `auto` で、`on` / `off` で明示できる。`auto` は UI 表示名ではなく方針名。Deep Research は `on` または必要判定時に Nodriver が送信前に `/Deepresearch` または tools menu から UI/mode 選択を試す。
 - Path B も nodriver-first とし、登録済み connector を固定ラベルで決定論的に選択してから送信する。
 - Path B は Tunnel + local MCP の `search` / `fetch` / `save_report` flow を既定にする。

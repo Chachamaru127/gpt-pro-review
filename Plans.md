@@ -339,3 +339,47 @@ closeout:      6.17 ↔ 6.18 → 6.19
 | 7.1 | [lane:gate][tdd:required] Path A packet に `web_search` / `deep_research` policy block を追加し、default `auto` と明示 `on/off` を support する | `build-review-packet` / `pro-review-browser-embed` / `pro-review-browser-run` / `pro-review-run --pro` で policy が request_file に入り、fixture test が PASS | 6.16 | cc:完了 |
 | 7.2 | [lane:fast][tdd:skip:docs-only] SKILL / README / usage / spec に Search / Deep Research policy を同期する | docs-sync test が policy 文言を確認し、`bash tests/run-all.sh` が PASS | 7.1 | cc:完了 |
 | 7.3 | [lane:gate][tdd:required] Deep Research `on` または auto 必要判定時に、Path A live の Nodriver が送信前に `/Deepresearch` または tools menu で UI/mode 選択を試す | `pro-review-browser-run` が `deep_research` を `pro-review-browser-drive` へ渡し、drive 側の policy 判定 fixture test が PASS。選択できない場合は通常送信せず fallback する | 7.1 | cc:完了 |
+
+---
+
+# Phase 8: Path A 入出力の堅牢化 + 復旧（Issue #1, 2026-06-29）
+
+## Context
+
+GitHub Issue #1。実 run（`asv-field-effectiveness-20260629-retry` / run_id `1782729485143-2ded30`, 約98KB packet）で、ChatGPT が marker 付き回答を返したのに自動保存されず、手動 DOM 抽出 + `save-reply`/`finish` で復旧した。
+原因: (a) Path A の入力が textarea 直書き・取得が DOM 解析で脆い、(b) Pro の生成が分単位で既定 timeout 120s を超え、超過時に答えが stranded・復旧手段なし。
+
+ユーザー確定方針:
+- 入力 = ファイル添付 / 取得 = コピーボタン→`pbpaste` を主経路、旧方式（直書き / DOM 解析）はフォールバック。
+- Path B のモデル assert は作らない。非Pro は ChatGPT UI で手動選択する。
+- Path B のフォルダ検知は `pro-review-watch` で既存・健全（`save_report` が呼ばれれば検知）。今回ノータッチ。
+
+## Spec delta
+
+- path: `docs/spec/00-project-spec.md`
+- change: Path A の入力を「短い指示文 + packet を `.md` 添付」、回答取得を「最後の assistant のコピーボタン→クリップボード(`pbpaste`)」を主経路にする。直書き / DOM 解析はフォールバックとして残す。生成待ち既定 timeout を Pro 向けに延長し、超過時は復旧コマンドを印字。`recover` サブコマンドで stranded 回答を救う。
+- why: 98KB を textarea に流す / DOM を解析する旧方式が送信ハング・取得失敗の根本。添付とコピーは ChatGPT が整形した綺麗な Markdown を確実に渡す / 受ける。生成待ちは別問題なので timeout 延長 + 復旧で担保。
+
+## team_validation_mode
+
+`manual-pass` — Product / Architecture / Security / QA / Skeptic を単独評価。
+
+## Tasks
+
+| Task | 内容 | DoD | Depends | Status |
+|------|------|-----|---------|--------|
+| 8.1 | [lane:gate][tdd:required] `pro-review-recover <project> <run_id>` を新設。専用ブラウザの該当会話から最後の回答をコピーボタン→`pbpaste` で取得 → marker 検証 → `save-reply` + `finish` | fixture（コピー取得をモック）で `REPLY-<run_id>.md` と report_bundle が生成、marker 不一致時は非0 + 理由を出す。`bash tests/run-all.sh` PASS | - | cc:完了 |
+| 8.2 | [lane:gate][tdd:required] Path A 入力をファイル添付主経路に。短い指示文を入力欄、packet(`.md`) を添付。添付UI不可なら直書きにフォールバック | drive の添付経路 fixture が PASS、フォールバック経路も維持。98KB を1文字ずつ打たない | - | cc:完了(fixture); live=manual-checklist |
+| 8.3 | [lane:gate][tdd:required] 回答取得をコピーボタン→`pbpaste` 主経路に。最後の assistant のコピー押下→クリップボード読取→marker 検証。失敗時 DOM 解析にフォールバック | fixture で copy 経路と fallback の両方 PASS | 8.1 | cc:完了(fixture); live=manual-checklist |
+| 8.4 | [lane:fast][tdd:required] Path A 生成待ち既定 timeout を 120s→600s に延長。timeout 時は fallback でなく `STILL_GENERATING` + 復旧コマンド `pro-review-recover <project> <run_id>` を印字 | browser-run の timeout 経路 fixture が復旧コマンド文字列を出す。`--timeout` 上書き維持 | 8.1 | cc:完了 |
+| 8.5 | [lane:fast][tdd:skip:docs-only] SKILL / README / usage / spec に 添付・コピー・`recover`・timeout を同期 | docs-sync が文言確認、`bash tests/run-all.sh` PASS | 8.1-8.4 | cc:完了 |
+
+## Out of scope（Issue #1 のうち今回やらない）
+
+- Path B モデル assert / `model_unverified`: 非Pro は ChatGPT UI で手動選択（ユーザー方針）。
+- 省略ファイル loud 警告 / `--packet-file` curated 入力 / profile 実在証明: 別スライス。OPEN のまま。
+
+## Phase 8 Risk Gate
+
+- コピーボタンのクリップボード読取は OS クリップボードを汚す。`recover` 実行時のみ・直後に検証。
+- 添付 / コピーの UI セレクタは ChatGPT 構造依存。壊れたら旧方式にフォールバック（確実性は下げない）。

@@ -34,6 +34,7 @@ TESTS=(
   "test-prompt-injection.sh"
   "test-denylist.sh"
   "test-danger-mode.sh"
+  "test-recover.sh"
 )
 
 pass=0; fail=0

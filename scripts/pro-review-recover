@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# Path A 復旧: 専用ブラウザの該当会話から最終回答をコピー取得し、
+#   marker 検証 → save-reply → finish まで通して report bundle 化する。
+#
+# Pro の生成は分単位で、Path A 本実行が生成待ち timeout して回答が
+# ブラウザに残ったまま(stranded)になることがある。そのとき本コマンドで救う。
+#
+# 使い方:
+#   pro-review-recover <project> <run_id> [--timeout sec] [--fixture-reply file]
+#
+# 取得は browser-drive --extract-only（コピーボタン→pbpaste 主経路、DOM 解析へ
+# フォールバック）。--fixture-reply はコピー取得をモックした reply 本文ファイル。
+set -euo pipefail
+umask 077
+
+SK="$(cd "$(dirname "$0")" && pwd -P)"
+BASE="$HOME/.pro-review"
+
+PROJECT="${1:?usage: pro-review-recover <project> <run_id> [--timeout sec] [--fixture-reply file]}"; shift
+RUN_ID="${1:?usage: pro-review-recover <project> <run_id> [--timeout sec] [--fixture-reply file]}"; shift
+TIMEOUT="120"
+FIXTURE_REPLY=""
+while [ "${1:-}" ]; do
+  case "$1" in
+    --timeout) TIMEOUT="${2:-120}"; shift 2;;
+    --fixture-reply) FIXTURE_REPLY="${2:-}"; shift 2;;
+    *) echo "usage: pro-review-recover <project> <run_id> [--timeout sec] [--fixture-reply file]" >&2; exit 2;;
+  esac
+done
+
+# project / run_id 検証（snapshot/embed/save-reply と同じ path-safe 規則）
+if ! printf '%s' "$PROJECT" | grep -qE '^[A-Za-z0-9._-]+$' || [ "$PROJECT" = "." ] || [ "$PROJECT" = ".." ]; then
+  echo "[error] invalid project: '$PROJECT'" >&2; exit 2
+fi
+if ! printf '%s' "$RUN_ID" | grep -qE '^[A-Za-z0-9._-]+$' || [ "$RUN_ID" = "." ] || [ "$RUN_ID" = ".." ]; then
+  echo "[error] invalid run_id: '$RUN_ID'" >&2; exit 2
+fi
+
+INBOX="$BASE/inbox/$PROJECT"
+mkdir -p "$INBOX"
+chmod 700 "$INBOX" 2>/dev/null || true
+
+echo "project: $PROJECT"
+echo "run_id: $RUN_ID"
+
+# 1) 回答を取得（fixture か live extract-only）
+if [ -n "$FIXTURE_REPLY" ]; then
+  DRIVE_ARGS=(--run-id "$RUN_ID" --fixture-reply "$FIXTURE_REPLY")
+else
+  DRIVE_ARGS=(--run-id "$RUN_ID" --extract-only --timeout "$TIMEOUT")
+fi
+
+set +e
+REPLY_BODY=$("$SK/pro-review-browser-drive" "${DRIVE_ARGS[@]}" 2> >(cat >&2))
+RC=$?
+set -e
+if [ "$RC" -ne 0 ] || [ -z "$REPLY_BODY" ]; then
+  echo "STOP_REASON=recover_extract_failed"
+  echo "NEXT_ACTION=専用ブラウザで該当会話を開き、回答末尾に [[DONE-$RUN_ID]] があるか確認して再実行"
+  [ -n "$REPLY_BODY" ] && printf '%s\n' "$REPLY_BODY"
+  exit 3
+fi
+
+# 2) save-reply（REPLY-<run_id>.md を inbox に。marker/同一 run_id を再検証）
+SAVE_OUT=$(printf '%s' "$REPLY_BODY" | "$SK/pro-review-save-reply" "$PROJECT" "$RUN_ID")
+echo "$SAVE_OUT"
+REPLY=$(printf '%s\n' "$SAVE_OUT" | awk '/^saved:/{print $2; exit}')
+[ -n "$REPLY" ] || { echo "[error] save-reply failed" >&2; exit 1; }
+
+# 3) finish（report bundle 化 + 露出を閉じる）
+PRO_REVIEW_REPORT_MODE=path-a-recover "$SK/pro-review-finish" "$PROJECT" "$REPLY"
+echo "[recovered] $PROJECT / $RUN_ID"

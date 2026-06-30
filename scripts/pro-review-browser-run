@@ -17,7 +17,8 @@ REPO="${1:-}"; [ -n "$REPO" ] || usage; shift
 PROJECT=""
 QUESTION=""
 FIXTURE_HTML=""
-TIMEOUT="${TIMEOUT:-120}"
+# Pro の生成は分単位。生成待ち既定を Pro 向けに長めにする（--timeout で上書き可）。
+TIMEOUT="${TIMEOUT:-600}"
 WEB_SEARCH="auto"
 DEEP_RESEARCH="auto"
 if [ "${1:-}" ] && [ "${1#--}" = "$1" ]; then PROJECT="$1"; shift; fi
@@ -25,7 +26,7 @@ while [ "${1:-}" ]; do
   case "$1" in
     --question) QUESTION="${2:-}"; shift 2;;
     --fixture-html) FIXTURE_HTML="${2:-}"; shift 2;;
-    --timeout) TIMEOUT="${2:-120}"; shift 2;;
+    --timeout) TIMEOUT="${2:-600}"; shift 2;;
     --web-search) WEB_SEARCH="${2:-}"; shift 2;;
     --deep-research) DEEP_RESEARCH="${2:-}"; shift 2;;
     *) usage;;
@@ -103,10 +104,17 @@ DRIVE_RC=$?
 set -e
 if [ "$DRIVE_RC" -eq 3 ]; then
   printf '%s\n' "$REPLY_BODY"
-  maybe_open_login "$REPLY_BODY"
   echo "project_name: $PROJECT"
   echo "run_id: $RUN_ID"
   echo "request_file: $REQ"
+  if printf '%s\n' "$REPLY_BODY" | grep -qx 'FALLBACK:login required'; then
+    maybe_open_login "$REPLY_BODY"
+  else
+    # 送信は済んだが取得できなかった場合、答えis生成中のままブラウザに残っている
+    # 可能性が高い。生成完了後に recover で確実に救える（生成待ちと永続化を分離）。
+    echo "STILL_GENERATING: ChatGPT が生成中の可能性。回答末尾に [[DONE-$RUN_ID]] が出てから次で保存できます:"
+    echo "recover: pro-review-recover $PROJECT $RUN_ID"
+  fi
   echo "manual_save: printf '%s' '<reply>' | pro-review-save-reply $PROJECT $RUN_ID"
   exit 3
 elif [ "$DRIVE_RC" -ne 0 ]; then

@@ -14,7 +14,7 @@ ChatGPT Web の別モデルに、レビュー / 調査 / 実装ドラフトを�
 
 | Path | 使う場面 | 読ませ方 | 保存方法 |
 |---|---|---|---|
-| Path A: 5.5Pro | Pro 品質が必要なレビュー | prompt に diff / packet を埋める | DOM 抽出 → `pro-review-save-reply` |
+| Path A: 5.5Pro | Pro 品質が必要なレビュー | packet を `.md` 添付（主）/ prompt 直書き（fb） | コピーボタン→`pbpaste`（主）/ DOM 抽出（fb）→ `pro-review-save-reply` |
 | Path B: 非 5.5Pro | nodriver で ChatGPT を開き、workspace を MCP で読ませる | `search` / `fetch` | ChatGPT が `save_report` |
 
 共通の最後:
@@ -41,6 +41,20 @@ pro-review-run --pro --repo /path/to/repo --project my-review --question "bug �
 `pro-review-browser-setup --open-login` を自動実行して専用 Chrome の ChatGPT ログイン画面を開く。
 ユーザーが行うのはブラウザ上のログイン、Chrome を閉じること、`pro-review-browser-setup --mark-logged-in` の実行だけ。
 資格情報入力・MFA・CAPTCHA の代行はしない。
+
+Path A の入力は packet を `.md` として添付するのが主経路（98KB を入力欄に直書きしない）。添付不可なら直書きにフォールバックする。
+回答取得はコピーボタン→`pbpaste` が主経路で、失敗時のみ DOM 抽出にフォールバックする。
+
+Pro の生成は分単位のため、Path A の生成待ち既定 timeout は 600 秒（`--timeout` で上書き可）。
+待ち切れず終了しても回答はブラウザに残るので、生成完了後に復旧できる。
+
+```bash
+# 答えis出ているのに自動保存されなかった時（timeout 後など）に救う
+pro-review-recover <project> <run_id>
+```
+
+`pro-review-recover` は専用ブラウザの該当会話から最終回答をコピー取得し、`[[DONE-<run_id>]]` を検証して `save-reply` + `finish` まで通す。
+`pro-review-run --pro` が timeout して exit 3 した時は、貼り付け用に `recover: pro-review-recover <project> <run_id>` を出力する。
 
 Path A の ChatGPT ツール利用方針は既定で `auto`。
 `auto` は UI 上の Auto ボタン名ではなく、この skill の方針名。

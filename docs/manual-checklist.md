@@ -17,6 +17,19 @@
 - easy report:
 - unresolved:
 
+## Path A live verify: attach + copy + recover (Phase 8, Issue #1)
+
+fixture では検証済み。以下は実 ChatGPT でのみ確認できる live 部分。
+
+- date:
+- 添付送信: packet が `.md` 添付として送られたか（入力欄に 98KB を直書きしていないか）
+- 添付フォールバック: 添付UIが無い時に直書きへ落ちたか
+- コピー取得: 最後の回答のコピーボタン→`pbpaste` で本文が取れたか
+- コピーフォールバック: コピー不可時に DOM 抽出へ落ちたか
+- timeout 動作: 生成が既定600sを超えた時に `STILL_GENERATING` + `recover:` 行が出たか
+- recover: `pro-review-recover <project> <run_id>` で stranded 回答が bundle 化できたか
+- unresolved:
+
 ## Path B: non-5.5Pro + Tunnel
 
 - date:

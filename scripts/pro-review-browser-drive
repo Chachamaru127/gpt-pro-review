@@ -13,6 +13,7 @@ import html
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 from collections.abc import Mapping
@@ -772,7 +773,92 @@ async def click_send(page, timeout):
     return False
 
 
-async def extract_live_reply(page, run_id, timeout):
+def read_clipboard():
+    """OS クリップボードを読む（mac=pbpaste）。取得できなければ None。"""
+    try:
+        out = subprocess.run(["pbpaste"], capture_output=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode != 0:
+        return None
+    return out.stdout.decode("utf-8", "replace")
+
+
+# 最後の assistant 回答の「コピー」ボタンを押す。ChatGPT は整形済み Markdown を
+# OS クリップボードに入れるので、DOM 解析より取りこぼしが少ない。
+COPY_LAST_REPLY_JS = """
+(() => {
+  const norm = (s) => String(s || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+  const turns = [...document.querySelectorAll('[data-message-author-role="assistant"]')];
+  if (!turns.length) return { ok: false, reason: 'no assistant message' };
+  const last = turns[turns.length - 1];
+  // 回答ブロック自身か、その近傍(article/turn 単位)から copy ボタンを探す
+  const scope = last.closest('article') || last.parentElement || last;
+  const buttons = [...scope.querySelectorAll('button,[role="button"]')];
+  const isCopy = (el) => {
+    const label = norm([
+      el.getAttribute('aria-label'),
+      el.getAttribute('data-testid'),
+      el.getAttribute('title'),
+      el.textContent
+    ].filter(Boolean).join(' '));
+    if (!label) return false;
+    return /copy|コピー/.test(label) && !/code|コード/.test(label);
+  };
+  const btn = buttons.find(isCopy);
+  if (!btn) return { ok: false, reason: 'copy button not found' };
+  btn.click();
+  return { ok: true };
+})()
+"""
+
+
+# 応答が生成中(停止ボタン表示)かを判定。生成中にコピーすると途中で拾うため待つ。
+IS_GENERATING_JS = """
+(() => {
+  const norm = (s) => String(s || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+  const btns = [...document.querySelectorAll('button,[role="button"]')];
+  const generating = btns.some((el) => {
+    const label = norm([
+      el.getAttribute('aria-label'),
+      el.getAttribute('data-testid'),
+      el.textContent
+    ].filter(Boolean).join(' '));
+    return /stop generating|停止|生成を停止|stop streaming/.test(label);
+  });
+  return { generating };
+})()
+"""
+
+
+async def extract_via_copy(page, run_id, timeout):
+    """コピーボタン→クリップポードで最終回答を取得し marker 検証する。"""
+    deadline = time.time() + timeout
+    last_error = ""
+    while time.time() < deadline:
+        gen = js_object(await js(page, IS_GENERATING_JS)) or {}
+        if gen.get("generating"):
+            await page.sleep(2)
+            continue
+        clicked = js_object(await js(page, COPY_LAST_REPLY_JS)) or {}
+        if not clicked.get("ok"):
+            last_error = clicked.get("reason", "copy button not found")
+            await page.sleep(2)
+            continue
+        await page.sleep(0.3)  # クリップボード反映待ち
+        clip = read_clipboard()
+        if clip:
+            try:
+                return validate_reply(clip, run_id), None
+            except ValueError as exc:
+                last_error = str(exc)
+        else:
+            last_error = "clipboard empty after copy"
+        await page.sleep(2)
+    return None, last_error or "timeout waiting for copy"
+
+
+async def extract_via_dom(page, run_id, timeout):
     deadline = time.time() + timeout
     last_error = ""
     while time.time() < deadline:
@@ -789,6 +875,84 @@ async def extract_live_reply(page, run_id, timeout):
                 last_error = str(exc)
         await page.sleep(2)
     return None, last_error or "timeout waiting for DONE marker"
+
+
+async def extract_live_reply(page, run_id, timeout):
+    """主経路=コピーボタン、失敗時に DOM 解析へフォールバック。"""
+    deadline = time.time() + timeout
+    # まずコピー経路に大半の時間を与え、ダメなら残り時間で DOM 経路を試す。
+    copy_budget = max(timeout - 20, timeout * 0.8)
+    reply, reason = await extract_via_copy(page, run_id, copy_budget)
+    if reply is not None:
+        sys.stderr.write("[pro-review-browser-drive] reply via copy button\n")
+        return reply, None
+    if reason == "login required":
+        return None, reason
+    remaining = max(deadline - time.time(), 5)
+    sys.stderr.write(
+        f"[pro-review-browser-drive] copy extraction failed ({reason}); falling back to DOM scrape\n"
+    )
+    dom_reply, dom_reason = await extract_via_dom(page, run_id, remaining)
+    if dom_reply is not None:
+        return dom_reply, None
+    return None, dom_reason or reason
+
+
+async def find_file_input(page):
+    try:
+        return await page.select("input[type=file]", timeout=3)
+    except Exception:
+        return None
+
+
+async def attach_request_file(page, request_path):
+    """packet(.md) を ChatGPT に添付する。失敗時は False を返し直書きへフォールバック。"""
+    file_input = await find_file_input(page)
+    if file_input is None:
+        opened = js_object(await click_tools_menu_candidate(page)) or {}
+        if opened.get("ok"):
+            await page.sleep(0.5)
+            file_input = await find_file_input(page)
+    if file_input is None:
+        return False, "file input not found"
+    try:
+        await file_input.send_file(request_path)
+    except Exception as exc:
+        return False, f"send_file failed: {exc}"
+    return True, "attached"
+
+
+def compose_attach_instruction(request_text, run_id, filename):
+    """添付時に入力欄へ入れる短い指示文。観点とマーカー要件だけを伝える。"""
+    review = markdown_section(request_text, "レビュー観点").strip()
+    lines = [
+        f"添付した Markdown ファイル `{filename}` がレビュー依頼です。",
+        "ファイル内の指示・対象コード・観点に従ってレビューしてください。",
+    ]
+    if review:
+        first = review.splitlines()[0].strip()
+        if first:
+            lines.append(f"観点: {first}")
+    lines.append(
+        f"回答の最終行に必ず `[[DONE-{run_id}]]` を単独で記載してください（完了検知に使います）。"
+    )
+    return "\n".join(lines)
+
+
+def extract_from_reply_file(path, run_id):
+    """--fixture-reply: コピー取得をモックした reply 本文を検証して出力する。"""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            reply = f.read()
+    except OSError as exc:
+        sys.stderr.write(f"[pro-review-browser-drive] cannot read reply fixture: {exc}\n")
+        return 2
+    try:
+        print(validate_reply(reply, run_id))
+        return 0
+    except ValueError as exc:
+        sys.stderr.write(f"[pro-review-browser-drive] error: {exc}\n")
+        return 2
 
 
 def classify_live_error(exc):
@@ -810,15 +974,18 @@ async def drive_live(args):
     paths = live_paths()
     if not os.path.exists(paths["login_marker"]):
         return fallback("login required")
-    if not args.request_file:
-        sys.stderr.write("[pro-review-browser-drive] --request-file is required in live mode\n")
-        return 2
-    try:
-        with open(args.request_file, "r", encoding="utf-8") as f:
-            request_text = f.read()
-    except OSError as exc:
-        sys.stderr.write(f"[pro-review-browser-drive] cannot read request file: {exc}\n")
-        return 2
+    request_text = ""
+    if not args.extract_only:
+        # 送信モードのみ request が必要。extract-only(recover) は不要。
+        if not args.request_file:
+            sys.stderr.write("[pro-review-browser-drive] --request-file is required in live mode\n")
+            return 2
+        try:
+            with open(args.request_file, "r", encoding="utf-8") as f:
+                request_text = f.read()
+        except OSError as exc:
+            sys.stderr.write(f"[pro-review-browser-drive] cannot read request file: {exc}\n")
+            return 2
     if not ensure_live_python():
         return fallback("nodriver unavailable")
     import nodriver
@@ -836,6 +1003,13 @@ async def drive_live(args):
         )
         page = await browser.get("https://chatgpt.com/")
         await page.sleep(2)
+        if args.extract_only:
+            # recover 用: 送信せず、開いている会話の最終回答だけ取得する。
+            reply, reason = await extract_live_reply(page, args.run_id, args.timeout)
+            if reply is None:
+                return fallback(reason)
+            print(reply)
+            return 0
         selector, editor = await wait_for_chat_input(page, min(args.timeout, 30))
         if not editor:
             content = await page.get_content()
@@ -881,21 +1055,40 @@ async def drive_live(args):
                 selector, editor = await wait_for_chat_input(page, min(args.timeout, 30))
                 if not editor:
                     return fallback("composer not found after deep research selection")
-        # fill_prompt の返り値は環境差で生 dict にならないことがあるため js_object で正規化する。
-        # 正規化せず isinstance(result, dict) で判定すると、注入は成功しているのに
-        # フォールバックの send_keys に落ち、98KB級の依頼文を1文字ずつ打って固まる。
-        result = js_object(await fill_prompt(page, request_text))
-        if not (result and result.get("ok")):
-            # 返り値が曖昧でも、DOM に実際に入っていれば送信に進む（再入力しない）。
-            verify = js_object(await js(page, PROMPT_LENGTH_JS)) or {}
-            filled = int(verify.get("length") or 0)
-            if filled < min(len(request_text), 64):
-                # 本当に空のときだけ入力を試みる。巨大依頼は send_keys せず fallback。
-                if len(request_text) <= SEND_KEYS_MAX_CHARS:
+        # 8.2: packet はファイル添付を主経路にする。98KB を入力欄に直書きしない。
+        # 添付できたら入力欄には短い指示文だけ入れる。添付不可なら直書きにフォールバック。
+        attached = False
+        if not args.no_attach and args.request_file:
+            ok_attach, detail = await attach_request_file(page, args.request_file)
+            if ok_attach:
+                attached = True
+                sys.stderr.write(f"[pro-review-browser-drive] request attached: {detail}\n")
+                instruction = compose_attach_instruction(
+                    request_text, args.run_id, os.path.basename(args.request_file)
+                )
+                res = js_object(await fill_prompt(page, instruction)) or {}
+                if not res.get("ok"):
                     await editor.click()
-                    await editor.send_keys(request_text)
-                else:
-                    return fallback("prompt injection failed (request too large to type)")
+                    await editor.send_keys(instruction)
+            else:
+                sys.stderr.write(
+                    f"[pro-review-browser-drive] attach failed ({detail}); "
+                    "falling back to inline paste\n"
+                )
+        if not attached:
+            # フォールバック: 直書き。fill_prompt の返り値は環境差で生 dict にならない
+            # ことがあるため js_object で正規化する。注入が成功しているのに send_keys に
+            # 落ちて 98KB を1文字ずつ打つのを避ける。
+            result = js_object(await fill_prompt(page, request_text))
+            if not (result and result.get("ok")):
+                verify = js_object(await js(page, PROMPT_LENGTH_JS)) or {}
+                filled = int(verify.get("length") or 0)
+                if filled < min(len(request_text), 64):
+                    if len(request_text) <= SEND_KEYS_MAX_CHARS:
+                        await editor.click()
+                        await editor.send_keys(request_text)
+                    else:
+                        return fallback("prompt injection failed (request too large to type)")
         if not await click_send(page, 15):
             return fallback("send button not found")
         if args.send_only:
@@ -933,8 +1126,16 @@ def main():
     ap.add_argument("--deep-research", choices=TOOL_POLICY_CHOICES, default="auto",
                     help="select Deep Research in ChatGPT UI before sending: auto|on|off")
     ap.add_argument("--timeout", type=float, default=120.0)
+    ap.add_argument("--extract-only", action="store_true",
+                    help="送信せず、開いている会話の最終回答だけ取得する (recover 用)")
+    ap.add_argument("--no-attach", action="store_true",
+                    help="ファイル添付を使わず入力欄に直書きする (フォールバック経路)")
+    ap.add_argument("--fixture-reply",
+                    help="copy 取得をモックした reply 本文ファイル (fixture)")
     args = ap.parse_args()
 
+    if args.fixture_reply:
+        return extract_from_reply_file(args.fixture_reply, args.run_id)
     if args.fixture_html and args.mode == "connector":
         return fixture_connector_send(args.fixture_html, args.connector_label)
     if args.fixture_html:

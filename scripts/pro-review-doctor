@@ -26,7 +26,8 @@ for s in \
   pro-review-browser-setup pro-review-browser-embed pro-review-browser-drive pro-review-browser-run \
   pro-review-mcp pro-review-mcp-search-fetch pro-review-save-reply \
   pro-review-watch pro-review-finish pro-review-summarize \
-  pro-review-tunnel-check pro-review-redact-log pro-review-danger-mode; do
+  pro-review-tunnel-check pro-review-redact-log pro-review-danger-mode \
+  pro-review-recover; do
   if [ -x "$SK/$s" ]; then
     ok "script:$s" "executable"
   else

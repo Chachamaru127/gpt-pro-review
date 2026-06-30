@@ -59,7 +59,12 @@ pro-review-run --pro \
 Deep Research は複数ソースを横断して調査・統合する重い作業向け。
 通常の repo-local なコードレビューだけなら `auto` のままでよい。
 
+入力は packet を `.md` 添付するのが主経路で、98KB を入力欄に直書きしない。添付できない時だけ直書きにフォールバックする。
+回答取得はコピーボタン→`pbpaste` が主経路で、失敗時のみ DOM 抽出にフォールバックする。
+Pro の生成は分単位なので生成待ち既定 timeout は 600 秒（`--timeout` で上書き可）。
+
 失敗時に `FALLBACK:<reason>` が出たら、表示された `manual_save:` の形で手貼り保存できる。
+生成待ちが timeout して exit 3 した場合は `recover: pro-review-recover <project> <run_id>` が出るので、ブラウザに答えが出てから実行する。
 
 ## Path B: 非 5.5Pro + MCP
 
@@ -97,6 +102,14 @@ pro-review-tunnel-check <project>
 ```
 
 `STOP_REASON` が出たら、隣の `NEXT_ACTION` を実行する。
+
+Path A で「ChatGPT は答えたのに自動保存されなかった」時（生成待ち timeout 後など）は、ブラウザに答えが残っているので復旧できる。
+
+```bash
+pro-review-recover <project> <run_id>
+```
+
+`pro-review-recover` は専用ブラウザの該当会話から最終回答をコピー取得し、`[[DONE-<run_id>]]` を検証して `save-reply` + `finish` まで通し、`reports/<project>/<run_id>/` に bundle を作る。
 
 ## cleanup
 
