@@ -601,6 +601,7 @@ def main():
     out.append("")
     append_chatgpt_tool_policy(out, args.web_search, args.deep_research)
 
+    omitted = []  # embed モードで予算超過/除外されたファイル（summary と warn で使う）
     if args.mode == "github-branch":
         # GitHub コネクタ指示モード: コードは貼らない
         out.append("## 対象（ChatGPT の GitHub コネクタで読んでください）")
@@ -692,6 +693,13 @@ def main():
             for o in omitted:
                 out.append(f"- {o}")
             out.append("")
+            # 予算超過で「重要な変更ファイル」が落ちたら見落とせない形で warn する（Issue #1）。
+            budget_omitted = [o for o in omitted if "予算超過" in o]
+            if budget_omitted:
+                eprint(f"⚠ OMITTED: {len(budget_omitted)} 件の変更ファイルが max-bytes({args.max_bytes}) 上限で同梱されませんでした:")
+                for o in budget_omitted:
+                    eprint(f"  - {o}")
+                eprint("  → 重要なら --max-bytes を上げるか、--packet-file で対象を絞ってください。")
 
     out.append("## 出力形式")
     out.append("1. 全体評価（このまま進めてよいか/要修正か）")
@@ -743,7 +751,7 @@ def main():
         except Exception:
             pass
 
-    eprint(f"packet: {len(text)} bytes / 変更ファイル {len(changed)} / mode={args.mode} / clip={'yes' if clipped else 'no'}")
+    eprint(f"packet: {len(text)} bytes / 変更ファイル {len(changed)} / 省略 {len(omitted)} / mode={args.mode} / clip={'yes' if clipped else 'no'}")
     print(f"RESULT: {os.path.abspath(args.out)}" + ("  (クリップボードにコピー済み)" if clipped else ""))
 
 if __name__ == "__main__":

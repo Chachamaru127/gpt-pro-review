@@ -383,3 +383,23 @@ GitHub Issue #1。実 run（`asv-field-effectiveness-20260629-retry` / run_id `1
 
 - コピーボタンのクリップボード読取は OS クリップボードを汚す。`recover` 実行時のみ・直後に検証。
 - 添付 / コピーの UI セレクタは ChatGPT 構造依存。壊れたら旧方式にフォールバック（確実性は下げない）。
+
+## Phase 8 live verify メモ（2026-06-30）
+
+- 8.4(timeout→`recover` 印字) は実 `--pro` で実証。fallback 時に `STILL_GENERATING` + `recover: pro-review-recover <project> <run_id>` を印字した。
+- 8.2(添付)/8.3(コピー) はエージェント実行コンテキストで nodriver が GUI Chrome に接続できず（"Failed to connect to browser"）未到達。コードは fixture 検証済み。live 検証はユーザーの対話セッション（GUI Chrome 可）で `docs/manual-checklist.md` の Phase 8 項目に従い実施する。
+
+---
+
+# Phase 9: Issue #1 残スライス（省略警告 / curated packet）（2026-06-30）
+
+## Context
+
+Issue #1 のうち Phase 8 でスコープ外にした項目を別スライスで消化する。Path B モデル assert と profile 実在証明は対象外（前者はユーザー方針で UI 手動選択、後者は別途）。
+
+## Tasks
+
+| Task | 内容 | DoD | Depends | Status |
+|------|------|-----|---------|--------|
+| 9.1 | [lane:gate][tdd:required] 予算超過で変更ファイルが省略された時、見落とせない形で warn する（`⚠ OMITTED` を stderr、summary に `省略 N`） | `test-omission-warn.sh` が PASS、`bash tests/run-all.sh` PASS | - | cc:完了 |
+| 9.2 | [lane:gate][tdd:required] `--packet-file PATH` で curated Markdown packet を直接使う（repo 全体再構築をスキップ。secret scan + DONE marker 注入は維持）。`build-review-packet` / `pro-review-browser-embed` / `pro-review-run --pro` に通す | fixture で curated packet が REQ になり marker 付与・scan される。直書き/添付経路は維持。run-all PASS | - | cc:TODO |

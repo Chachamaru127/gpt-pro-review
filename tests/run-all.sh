@@ -35,6 +35,7 @@ TESTS=(
   "test-denylist.sh"
   "test-danger-mode.sh"
   "test-recover.sh"
+  "test-omission-warn.sh"
 )
 
 pass=0; fail=0
