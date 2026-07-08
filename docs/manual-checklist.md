@@ -30,6 +30,17 @@ fixture では検証済み。以下は実 ChatGPT でのみ確認できる live 
 - recover: `pro-review-recover <project> <run_id>` で stranded 回答が bundle 化できたか
 - unresolved:
 
+## Path A live verify: Phase 10 browser state + liveness (2026-07-08)
+
+- date: 2026-07-08
+- project: `phase10-live-1783500846`
+- run_id: `1783500846448-390dc8`
+- attach: ✅ `request attached: attached`
+- liveness: ✅ `generating... Ns elapsed (回答を確定中)` が約10秒間隔で出力
+- copy: ⚠ copy button not found → DOM fallback で回収成功（コピー主経路は未達、fallback で完了）
+- report bundle: ✅ `~/.pro-review/reports/phase10-live-1783500846/1783500846448-390dc8`
+- unresolved: コピーボタンセレクタの ChatGPT UI 追従（DOM fallback で回避可能）
+
 ## Path B: non-5.5Pro + Tunnel
 
 - date:

@@ -258,7 +258,7 @@ ChatGPT Web / Developer Mode / MCP の実利用制約と競合調査を踏まえ
 |------|------|-----|---------|--------|
 | 6.17 | [lane:gate][tdd:skip:manual-e2e] 実 ChatGPT Pro で Path A を 1 周: ブラウザ起動→レビュー依頼→回答取得→reports 保存→Claude summary→`$easy` 報告 | `reports/<project>/` と manual checklist に request/reply/summary/easy report が保存され、ユーザーに次アクションが提示される。実測: project=`gpt-pro-review-patha-live-1782320833`, run_id=`1782320834115-915037`, bundle=`~/.pro-review/reports/gpt-pro-review-patha-live-1782320833/1782320834115-915037`, summary=`total=1`, finish で exposure close | 6.16 | cc:完了 |
 | 6.18 | [lane:gate][tdd:skip:manual-e2e] 実 ChatGPT 非 5.5Pro/Tunnel で Path B を 1 周: app/tunnel 起動→MCP 読み込み→回答取得→reports 保存→Claude summary→`$easy` 報告 | `reports/<project>/` と manual checklist に tunnel health/reply/summary/easy report が保存され、finish で露出が閉じる。現状: local tunnel は `health_http=200` で `TOOLS=search,fetch,save_report`、read-only 試験では `TOOLS=search,fetch` まで確認。どちらでも ChatGPT 側で custom app / connector 作成が `Something went wrong` になり、アプリ作成自体が未通過。露出は close 済み | 6.16 | cc:TODO(chatgpt app creation gate) |
-| 6.19 | [lane:fast][tdd:skip:docs-only] closeout commit 用の変更一覧・テスト結果・未解決点を `HANDOFF.md` に更新する | HANDOFF が nodriver-first / API out / CH-GIFT out / next command を反映し、`git status` の未追跡が意図したものだけ。live e2e 完了後に final closeout へ更新 | 6.17, 6.18 | cc:進行中 |
+| 6.19 | [lane:fast][tdd:skip:docs-only] closeout commit 用の変更一覧・テスト結果・未解決点を `HANDOFF.md` に更新する | HANDOFF が nodriver-first / API out / CH-GIFT out / next command を反映し、`git status` の未追跡が意図したものだけ。live e2e 完了後に final closeout へ更新 | 6.17, 6.18 | cc:完了(Phase 10 closeout; 6.18 gate 残) |
 
 ## Required / Recommended / Reject
 
@@ -403,3 +403,31 @@ Issue #1 のうち Phase 8 でスコープ外にした項目を別スライス�
 |------|------|-----|---------|--------|
 | 9.1 | [lane:gate][tdd:required] 予算超過で変更ファイルが省略された時、見落とせない形で warn する（`⚠ OMITTED` を stderr、summary に `省略 N`） | `test-omission-warn.sh` が PASS、`bash tests/run-all.sh` PASS | - | cc:完了 |
 | 9.2 | [lane:gate][tdd:required] `--packet-file PATH` で curated Markdown packet を直接使う（repo 全体再構築をスキップ。secret scan + DONE marker 注入は維持）。`build-review-packet` / `pro-review-browser-embed` / `pro-review-run --pro` に通す | fixture で curated packet が REQ になり marker 付与・scan される。直書き/添付経路は維持。run-all PASS | - | cc:TODO |
+
+---
+
+# Phase 10: Cursor + Oracle sync + browser state（2026-07-05）
+
+## Context
+
+ユーザー要件: (1) Cursor から gpt-pro-review を使えるようにする、(2) Oracle を最新同期して良いパターンを取り込む、(3) timeout 時も画面状態が取れれば判断できるようにする。不明点はユーザーに確認。
+
+## Tasks
+
+| Task | 内容 | DoD | Status |
+|------|------|-----|--------|
+| 10.1 | Cursor: `.cursor/commands/gpt-pro-review.md`, `.cursor/skills/`, `AGENTS.md` | Cursor `/gpt-pro-review` + docs-sync PASS | cc:完了 |
+| 10.2 | Oracle: `scripts/sync-oracle-reference.sh`, `vendor/oracle/SYNCED_COMMIT`, `docs/oracle-adoptions.md` | sync 実行済み、採用表あり | cc:完了 |
+| 10.3 | browser-drive: send 確認、BROWSER_STATE、liveness log、Oracle placeholder/attachment パターン | test-browser-drive PASS、`browser_state:` on fallback | cc:完了 |
+| 10.4 | browser-run/recover: timeout 600 統一、`browser_state` 表示、STILL_GENERATING 文言改善 | run-all PASS | cc:完了 |
+
+## Phase 10 live verify（2026-07-08）
+
+- project: `phase10-live-1783500846`
+- run_id: `1783500846448-390dc8`
+- command: `scripts/pro-review-run --pro --repo gpt-pro-review --project phase10-live-1783500846 --question "..."`
+- attach: `request attached: attached` ✅
+- liveness: `generating... Ns elapsed (回答を確定中)` ✅
+- copy: copy button 未検出 → DOM fallback で回収 ✅
+- report_bundle: `~/.pro-review/reports/phase10-live-1783500846/1783500846448-390dc8` ✅
+- tests: `bash tests/run-all.sh` pass=30 fail=0（T8 環境依存修正込み）

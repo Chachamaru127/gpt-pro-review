@@ -76,7 +76,44 @@ class AssistantParser(HTMLParser):
             self.current.append(data)
 
 
-def fallback(reason):
+def summarize_browser_state(state):
+    """Operator-facing one-liner derived from a BROWSER_STATE snapshot."""
+    if not state:
+        return "unknown"
+    parts = []
+    if state.get("generating"):
+        parts.append("generating")
+    elif state.get("copyButtonVisible"):
+        parts.append("copy-ready")
+    else:
+        parts.append("idle-or-unknown")
+    status = state.get("status") or ""
+    if status:
+        parts.append(str(status))
+    parts.append(f"assistant={state.get('assistantTurns', 0)}")
+    return "; ".join(parts)
+
+
+def state_from_parser(parser):
+    """Build a coarse BROWSER_STATE dict from static HTML fixture parsing."""
+    return {
+        "generating": bool(parser.stop_visible),
+        "status": "stop visible" if parser.stop_visible else "",
+        "userTurns": 0,
+        "assistantTurns": len(parser.messages),
+        "loginRequired": bool(parser.login_required),
+        "composerVisible": False,
+        "copyButtonVisible": False,
+    }
+
+
+def fallback(reason, state=None):
+    if state:
+        print(
+            "BROWSER_STATE:"
+            + json.dumps(state, ensure_ascii=False, separators=(",", ":"))
+        )
+        print(f"BROWSER_STATE_SUMMARY:{summarize_browser_state(state)}")
     print(f"FALLBACK:{reason}")
     return 3
 
@@ -154,12 +191,13 @@ def extract_from_html(path, run_id):
         raw = f.read().decode("utf-8", errors="replace")
     parser = AssistantParser()
     parser.feed(raw)
+    state = state_from_parser(parser)
     if parser.login_required:
-        return fallback("login required")
+        return fallback("login required", state)
     if parser.stop_visible:
-        return fallback("response still generating")
+        return fallback("response still generating", state)
     if not parser.messages:
-        return fallback("assistant reply not found")
+        return fallback("assistant reply not found", state)
     reply = html.unescape(parser.messages[-1])
     try:
         print(validate_reply(reply, run_id))
@@ -738,17 +776,36 @@ async def fill_prompt(page, request_text):
     return await js(page, script)
 
 
-async def click_send(page, timeout):
-    script = """
+async def wait_send_enabled(page, timeout):
+    """添付アップロード完了まで send-button が disabled のことがある。有効化を待つ。"""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        state = js_object(await js(page, SEND_READY_JS)) or {}
+        if state.get("ready"):
+            return True, state.get("reason", "ready")
+        await page.sleep(0.5)
+    state = js_object(await js(page, SEND_READY_JS)) or {}
+    return False, state.get("reason", "send button not enabled")
+
+
+SEND_READY_JS = """
 (() => {
-  const candidates = [...document.querySelectorAll('button')];
+  const norm = (s) => String(s || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+  const editorSelectors = ['#prompt-textarea', 'textarea', "div[contenteditable='true']", "[data-testid='composer-text-input']", '.ProseMirror'];
+  const editor = editorSelectors.map(s => document.querySelector(s)).find(Boolean);
+  const scopes = [];
+  if (editor) {
+    const scoped = editor.closest('form') || editor.closest('[class*="composer"]');
+    if (scoped) scopes.push(scoped);
+  }
+  scopes.push(document);
   const score = (button) => {
-    const label = [
+    const label = norm([
       button.getAttribute('aria-label') || '',
       button.getAttribute('data-testid') || '',
       button.textContent || ''
-    ].join(' ').toLowerCase();
-    if (button.disabled || button.getAttribute('aria-disabled') === 'true') return 0;
+    ].join(' '));
+    if (button.getAttribute('data-testid') === 'send-button') return 5;
     if (label.includes('send-button')) return 4;
     if (label.includes('send prompt')) return 3;
     if (label.includes('send message')) return 3;
@@ -756,21 +813,103 @@ async def click_send(page, timeout):
     if (label.includes('送信')) return 2;
     return 0;
   };
-  const button = candidates.sort((a, b) => score(b) - score(a)).find(b => score(b) > 0);
-  if (!button) return false;
-  button.click();
-  return true;
+  for (const scope of scopes) {
+    const candidates = [...scope.querySelectorAll('button,[role="button"]')];
+    const button = candidates.sort((a, b) => score(b) - score(a)).find(b => score(b) > 0);
+    if (!button) continue;
+    const disabled = button.disabled || button.getAttribute('aria-disabled') === 'true';
+    if (!disabled) return { ready: true, reason: 'send-button enabled' };
+    return { ready: false, reason: 'send-button disabled (upload/processing?)' };
+  }
+  return { ready: false, reason: 'send button not found' };
 })()
 """
+
+
+# 送信ボタンの探索: composer 配下を優先し、見つからなければ document 全体へフォールバック。
+CLICK_SEND_JS = """
+(() => {
+  const norm = (s) => String(s || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+  const editorSelectors = ['#prompt-textarea', 'textarea', "div[contenteditable='true']", "[data-testid='composer-text-input']", '.ProseMirror'];
+  const editor = editorSelectors.map(s => document.querySelector(s)).find(Boolean);
+  const scopes = [];
+  if (editor) {
+    const scoped = editor.closest('form') || editor.closest('[class*="composer"]');
+    if (scoped) scopes.push(scoped);
+  }
+  scopes.push(document);
+  const score = (button) => {
+    const label = norm([
+      button.getAttribute('aria-label') || '',
+      button.getAttribute('data-testid') || '',
+      button.textContent || ''
+    ].join(' '));
+    if (button.disabled || button.getAttribute('aria-disabled') === 'true') return 0;
+    if (button.getAttribute('data-testid') === 'send-button') return 5;
+    if (label.includes('send-button')) return 4;
+    if (label.includes('send prompt')) return 3;
+    if (label.includes('send message')) return 3;
+    if (label === 'send' || label.includes(' send ')) return 2;
+    if (label.includes('送信')) return 2;
+    return 0;
+  };
+  for (const scope of scopes) {
+    const candidates = [...scope.querySelectorAll('button,[role="button"]')];
+    const button = candidates.sort((a, b) => score(b) - score(a)).find(b => score(b) > 0);
+    if (button) {
+      button.click();
+      return { ok: true };
+    }
+  }
+  return { ok: false, reason: 'button not found' };
+})()
+"""
+
+# クリック前後の状態を比較するためのベースライン/確認シグナル。
+# 「クリックできた」ではなく「実際に送信状態へ遷移したか」で成功判定する。
+SEND_BASELINE_JS = """
+(() => {
+  const userTurns = document.querySelectorAll('[data-message-author-role="user"]').length;
+  return { userTurns };
+})()
+"""
+
+SEND_CONFIRM_JS = """
+(() => {
+  const norm = (s) => String(s || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+  const userTurns = document.querySelectorAll('[data-message-author-role="user"]').length;
+  const stopBtn = [...document.querySelectorAll('button,[role="button"]')].some((el) => {
+    const label = norm([el.getAttribute('aria-label'), el.getAttribute('data-testid'), el.textContent].filter(Boolean).join(' '));
+    return /stop generating|停止|生成を停止|stop streaming/.test(label);
+  });
+  return { userTurns, stopBtn };
+})()
+"""
+
+
+async def click_send(page, timeout):
+    """送信ボタンをクリックし、user message 増加 or 生成中ボタン出現の
+    どちらかで送信完了を確認してから (True, reason) を返す。クリックできた
+    だけ（button.click() が例外を投げなかっただけ）では成功にしない。"""
+    baseline = js_object(await js(page, SEND_BASELINE_JS)) or {}
+    baseline_turns = int(baseline.get("userTurns") or 0)
     deadline = time.time() + timeout
+    ever_clicked = False
     while time.time() < deadline:
-        try:
-            if await js(page, script):
-                return True
-        except Exception:
-            pass
-        await page.sleep(0.5)
-    return False
+        result = js_object(await js(page, CLICK_SEND_JS)) or {}
+        if not result.get("ok"):
+            await page.sleep(0.5)
+            continue
+        ever_clicked = True
+        confirm_deadline = min(deadline, time.time() + 3)
+        while time.time() < confirm_deadline:
+            state = js_object(await js(page, SEND_CONFIRM_JS)) or {}
+            if int(state.get("userTurns") or 0) > baseline_turns or state.get("stopBtn"):
+                return True, "confirmed"
+            await page.sleep(0.3)
+    if ever_clicked:
+        return False, "clicked but no state transition observed"
+    return False, "send button not found"
 
 
 def read_clipboard():
@@ -792,6 +931,10 @@ COPY_LAST_REPLY_JS = """
   const turns = [...document.querySelectorAll('[data-message-author-role="assistant"]')];
   if (!turns.length) return { ok: false, reason: 'no assistant message' };
   const last = turns[turns.length - 1];
+  // copy ボタンが遅延マウントされる/表示領域外だと拾えないことがあるため、
+  // 探す前に必ず最終回答まで(要素単位・ページ単位の両方で)スクロールする。
+  last.scrollIntoView({ block: 'end' });
+  window.scrollTo(0, document.body.scrollHeight);
   // 回答ブロック自身か、その近傍(article/turn 単位)から copy ボタンを探す
   const scope = last.closest('article') || last.parentElement || last;
   const buttons = [...scope.querySelectorAll('button,[role="button"]')];
@@ -814,6 +957,8 @@ COPY_LAST_REPLY_JS = """
 
 
 # 応答が生成中(停止ボタン表示)かを判定。生成中にコピーすると途中で拾うため待つ。
+# あわせて、最終 assistant ターン近傍のステータス文言(経過時間・「Thinking」等)を
+# liveness signal として拾う。取得できなくても generating 判定自体には影響しない。
 IS_GENERATING_JS = """
 (() => {
   const norm = (s) => String(s || '').replace(/\\s+/g, ' ').trim().toLowerCase();
@@ -826,36 +971,150 @@ IS_GENERATING_JS = """
     ].filter(Boolean).join(' '));
     return /stop generating|停止|生成を停止|stop streaming/.test(label);
   });
-  return { generating };
+  let status = '';
+  const turns = [...document.querySelectorAll('[data-message-author-role="assistant"]')];
+  const last = turns[turns.length - 1];
+  if (last) {
+    const scope = last.closest('article') || last.parentElement || last;
+    const text = (scope.textContent || '').replace(/\\s+/g, ' ').trim();
+    const m = text.match(/(thinking|thought for|考え中|回答を確定中|生成中)[^.。\\n]{0,40}/i)
+      || text.match(/\\b\\d{1,2}:\\d{2}\\b/)
+      || text.match(/\\d+\\s*(秒|分|sec|s|min)\\b/i);
+    if (m) status = m[0].slice(0, 60);
+  }
+  return { generating, status };
 })()
 """
+
+# Oracle-derived snapshot: enough signal to decide timeout vs recover vs retry
+# without guessing from silence alone.
+BROWSER_STATE_JS = """
+(() => {
+  const norm = (s) => String(s || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+  const btns = [...document.querySelectorAll('button,[role="button"]')];
+  const generating = btns.some((el) => {
+    const label = norm([
+      el.getAttribute('aria-label'),
+      el.getAttribute('data-testid'),
+      el.textContent
+    ].filter(Boolean).join(' '));
+    return /stop generating|停止|生成を停止|stop streaming/.test(label);
+  });
+  let status = '';
+  const turns = [...document.querySelectorAll('[data-message-author-role="assistant"]')];
+  const last = turns[turns.length - 1];
+  if (last) {
+    const scope = last.closest('article') || last.parentElement || last;
+    const text = (scope.textContent || '').replace(/\\s+/g, ' ').trim();
+    const m = text.match(/(thinking|thought for|考え中|回答を確定中|生成中|pro thinking|finalizing|researching|searching)[^.。\\n]{0,40}/i)
+      || text.match(/\\b\\d{1,2}:\\d{2}\\b/)
+      || text.match(/\\d+\\s*(秒|分|sec|s|min)\\b/i);
+    if (m) status = m[0].slice(0, 60);
+  }
+  const userTurns = document.querySelectorAll('[data-message-author-role="user"]').length;
+  const assistantTurns = turns.length;
+  const loginRequired = Boolean(
+    document.querySelector('[data-testid="login-button"], button[data-testid="login-button"]')
+  );
+  const composerVisible = Boolean(
+    document.querySelector('#prompt-textarea, textarea, div[contenteditable="true"], [data-testid="composer-text-input"], .ProseMirror')
+  );
+  let copyButtonVisible = false;
+  if (last) {
+    const scope = last.closest('article') || last.parentElement || last;
+    const buttons = [...scope.querySelectorAll('button,[role="button"]')];
+    copyButtonVisible = buttons.some((btn) => {
+      const label = norm([
+        btn.getAttribute('aria-label'),
+        btn.getAttribute('data-testid'),
+        btn.textContent
+      ].filter(Boolean).join(' '));
+      return /copy|コピー/.test(label) && !/code|コード/.test(label);
+    });
+  }
+  return {
+    generating,
+    status,
+    userTurns,
+    assistantTurns,
+    loginRequired,
+    composerVisible,
+    copyButtonVisible
+  };
+})()
+"""
+
+
+def is_answer_now_placeholder(text):
+    """Oracle learned: Pro thinking placeholder turns are not final answers."""
+    normalized = re.sub(r"\s+", " ", (text or "")).strip().lower()
+    if not normalized:
+        return False
+    if normalized in ("chatgpt said:", "chatgpt said"):
+        return True
+    if (
+        "file upload request" in normalized
+        and ("pro thinking" in normalized or "chatgpt said" in normalized)
+    ):
+        return True
+    return "answer now" in normalized and (
+        "pro thinking" in normalized or "chatgpt said" in normalized
+    )
+
+
+async def read_browser_state(page):
+    return js_object(await js(page, BROWSER_STATE_JS)) or {}
 
 
 async def extract_via_copy(page, run_id, timeout):
     """コピーボタン→クリップポードで最終回答を取得し marker 検証する。"""
     deadline = time.time() + timeout
+    started = time.time()
     last_error = ""
+    tick = 0
     while time.time() < deadline:
         gen = js_object(await js(page, IS_GENERATING_JS)) or {}
         if gen.get("generating"):
+            tick += 1
+            if tick % 5 == 1:
+                # 単なる無出力タイムアウトだと「止まっているのか進んでいるのか」
+                # 区別できないため、経過秒数(+拾えれば ChatGPT 側のステータス文言)を
+                # liveness signal として定期的に stderr へ出す。
+                elapsed = int(time.time() - started)
+                status = gen.get("status") or ""
+                suffix = f" ({status})" if status else ""
+                sys.stderr.write(
+                    f"[pro-review-browser-drive] generating... {elapsed}s elapsed{suffix}\n"
+                )
             await page.sleep(2)
             continue
         clicked = js_object(await js(page, COPY_LAST_REPLY_JS)) or {}
         if not clicked.get("ok"):
             last_error = clicked.get("reason", "copy button not found")
+            sys.stderr.write(f"[pro-review-browser-drive] copy retry: {last_error}\n")
             await page.sleep(2)
             continue
         await page.sleep(0.3)  # クリップボード反映待ち
         clip = read_clipboard()
         if clip:
+            if is_answer_now_placeholder(clip):
+                last_error = "assistant placeholder (answer now / pro thinking)"
+                sys.stderr.write(
+                    f"[pro-review-browser-drive] copy retry: {last_error}\n"
+                )
+                await page.sleep(2)
+                continue
             try:
-                return validate_reply(clip, run_id), None
+                return validate_reply(clip, run_id), None, None
             except ValueError as exc:
                 last_error = str(exc)
         else:
             last_error = "clipboard empty after copy"
         await page.sleep(2)
-    return None, last_error or "timeout waiting for copy"
+    state = await read_browser_state(page)
+    if state.get("generating"):
+        return None, "response still generating", state
+    return None, last_error or "timeout waiting for copy", state
 
 
 async def extract_via_dom(page, run_id, timeout):
@@ -882,20 +1141,21 @@ async def extract_live_reply(page, run_id, timeout):
     deadline = time.time() + timeout
     # まずコピー経路に大半の時間を与え、ダメなら残り時間で DOM 経路を試す。
     copy_budget = max(timeout - 20, timeout * 0.8)
-    reply, reason = await extract_via_copy(page, run_id, copy_budget)
+    reply, reason, copy_state = await extract_via_copy(page, run_id, copy_budget)
     if reply is not None:
         sys.stderr.write("[pro-review-browser-drive] reply via copy button\n")
-        return reply, None
+        return reply, None, None
     if reason == "login required":
-        return None, reason
+        return None, reason, copy_state
     remaining = max(deadline - time.time(), 5)
     sys.stderr.write(
         f"[pro-review-browser-drive] copy extraction failed ({reason}); falling back to DOM scrape\n"
     )
     dom_reply, dom_reason = await extract_via_dom(page, run_id, remaining)
     if dom_reply is not None:
-        return dom_reply, None
-    return None, dom_reason or reason
+        return dom_reply, None, None
+    state = copy_state or await read_browser_state(page)
+    return None, dom_reason or reason, state
 
 
 async def find_file_input(page):
@@ -903,6 +1163,33 @@ async def find_file_input(page):
         return await page.select("input[type=file]", timeout=3)
     except Exception:
         return None
+
+
+def attachment_evidence_js(filename):
+    """ファイル名(先頭40字)が DOM 上のどこかに現れたかを見る、添付完了の目視確認用 JS。
+    ChatGPT 側のチップ要素の class/testid は変動しうるので特定セレクタに賭けず、
+    body 全体のテキスト検索という壊れにくい方法に倒す。"""
+    payload = json.dumps(filename[:40])
+    return f"""
+(() => {{
+  const needle = ({payload}).toLowerCase();
+  if (!needle) return {{ found: false }};
+  const body = document.body ? (document.body.textContent || '') : '';
+  return {{ found: body.toLowerCase().includes(needle) }};
+}})()
+"""
+
+
+async def wait_attachment_evidence(page, filename, timeout):
+    """添付ファイル名が画面上に現れるまで待つ。見つからなくても送信自体は
+    続行し、loud warning に留める（セレクタの当て推量で正常経路を壊さないため）。"""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        state = js_object(await js(page, attachment_evidence_js(filename))) or {}
+        if state.get("found"):
+            return True
+        await page.sleep(0.5)
+    return False
 
 
 async def attach_request_file(page, request_path):
@@ -919,7 +1206,14 @@ async def attach_request_file(page, request_path):
         await file_input.send_file(request_path)
     except Exception as exc:
         return False, f"send_file failed: {exc}"
-    return True, "attached"
+    filename = os.path.basename(request_path)
+    confirmed = await wait_attachment_evidence(page, filename, 15)
+    if not confirmed:
+        sys.stderr.write(
+            f"[pro-review-browser-drive] ⚠ attach unconfirmed: filename '{filename}' "
+            "not detected on page within 15s; proceeding anyway (verify manually if send fails)\n"
+        )
+    return True, "attached" if confirmed else "attached (unconfirmed)"
 
 
 def compose_attach_instruction(request_text, run_id, filename):
@@ -1005,9 +1299,9 @@ async def drive_live(args):
         await page.sleep(2)
         if args.extract_only:
             # recover 用: 送信せず、開いている会話の最終回答だけ取得する。
-            reply, reason = await extract_live_reply(page, args.run_id, args.timeout)
+            reply, reason, state = await extract_live_reply(page, args.run_id, args.timeout)
             if reply is None:
-                return fallback(reason)
+                return fallback(reason, state)
             print(reply)
             return 0
         selector, editor = await wait_for_chat_input(page, min(args.timeout, 30))
@@ -1015,9 +1309,10 @@ async def drive_live(args):
             content = await page.get_content()
             parser = AssistantParser()
             parser.feed(content)
+            state = state_from_parser(parser)
             if parser.login_required:
-                return fallback("login required")
-            return fallback("composer not found")
+                return fallback("login required", state)
+            return fallback("composer not found", state)
         if args.mode == "connector":
             selected, detail = await select_connector_mode(
                 page, args.connector_label, min(args.timeout, 30)
@@ -1070,6 +1365,14 @@ async def drive_live(args):
                 if not res.get("ok"):
                     await editor.click()
                     await editor.send_keys(instruction)
+                verify = js_object(await js(page, PROMPT_LENGTH_JS)) or {}
+                if int(verify.get("length") or 0) < 8:
+                    sys.stderr.write(
+                        "[pro-review-browser-drive] attach instruction not confirmed in composer; "
+                        "retrying send_keys\n"
+                    )
+                    await editor.click()
+                    await editor.send_keys(instruction)
             else:
                 sys.stderr.write(
                     f"[pro-review-browser-drive] attach failed ({detail}); "
@@ -1089,16 +1392,26 @@ async def drive_live(args):
                         await editor.send_keys(request_text)
                     else:
                         return fallback("prompt injection failed (request too large to type)")
-        if not await click_send(page, 15):
-            return fallback("send button not found")
+        ready, ready_reason = await wait_send_enabled(page, min(args.timeout, 60))
+        if not ready:
+            state = await read_browser_state(page)
+            sys.stderr.write(
+                f"[pro-review-browser-drive] send not ready: {ready_reason}\n"
+            )
+            return fallback(f"send not ready: {ready_reason}", state)
+        sent_ok, sent_reason = await click_send(page, 20)
+        if not sent_ok:
+            state = await read_browser_state(page)
+            sys.stderr.write(f"[pro-review-browser-drive] send not confirmed: {sent_reason}\n")
+            return fallback(f"send not confirmed: {sent_reason}", state)
         if args.send_only:
             print("sent: connector" if args.mode == "connector" else "sent: direct")
             if args.mode == "connector":
                 print(f"connector_label: {args.connector_label}")
             return 0
-        reply, reason = await extract_live_reply(page, args.run_id, args.timeout)
+        reply, reason, state = await extract_live_reply(page, args.run_id, args.timeout)
         if reply is None:
-            return fallback(reason)
+            return fallback(reason, state)
         print(reply)
         return 0
     except Exception as exc:
@@ -1125,7 +1438,7 @@ def main():
                     help="return after sending instead of waiting for a DOM reply")
     ap.add_argument("--deep-research", choices=TOOL_POLICY_CHOICES, default="auto",
                     help="select Deep Research in ChatGPT UI before sending: auto|on|off")
-    ap.add_argument("--timeout", type=float, default=120.0)
+    ap.add_argument("--timeout", type=float, default=600.0)
     ap.add_argument("--extract-only", action="store_true",
                     help="送信せず、開いている会話の最終回答だけ取得する (recover 用)")
     ap.add_argument("--no-attach", action="store_true",

@@ -56,6 +56,8 @@ RC=$?
 set -e
 assert_eq "3" "$RC" "T3 stop visible fallback"
 assert_contains "$OUT" "FALLBACK:response still generating" "T3 fallback reason"
+assert_contains "$OUT" "BROWSER_STATE_SUMMARY:" "T3 browser state summary"
+assert_contains "$OUT" "generating" "T3 browser state shows generating"
 
 LOGIN="$TMP/login.html"
 cat > "$LOGIN" <<EOF
@@ -111,11 +113,20 @@ PY
 assert_exit_ok "$?" "T7 profile lock classified"
 
 python3 - "$DRV" <<'PY'
+import builtins
 import importlib.machinery
 import os
 import sys
 mod = importlib.machinery.SourceFileLoader("pro_review_browser_drive_reexec", sys.argv[1]).load_module()
 calls = []
+real_import = builtins.__import__
+
+def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+    if name == "nodriver":
+        raise ImportError("forced for test")
+    return real_import(name, globals, locals, fromlist, level)
+
+builtins.__import__ = fake_import
 mod.live_paths = lambda: {"venv_python": "/tmp/prr-venv/bin/python"}
 mod.os.path.exists = lambda path: True
 mod.sys.executable = "/usr/local/bin/python3"
@@ -161,6 +172,9 @@ assert mod.decide_deep_research_selection("on", normal)[0] is True
 assert mod.decide_deep_research_selection("off", current)[0] is False
 assert mod.decide_deep_research_selection("auto", normal)[0] is False
 assert mod.decide_deep_research_selection("auto", current)[0] is True
+assert mod.is_answer_now_placeholder("Pro thinking Answer now")
+assert not mod.is_answer_now_placeholder("final review text")
+assert mod.summarize_browser_state({"generating": True, "assistantTurns": 1, "status": "thinking"}) == "generating; thinking; assistant=1"
 assert mod.js_object({"ok": True}) == {"ok": True}
 assert mod.js_object('{"ok": true, "label": "Deep Research"}')["ok"] is True
 class Obj:

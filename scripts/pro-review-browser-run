@@ -102,17 +102,26 @@ set +e
 REPLY_BODY=$("$SK/pro-review-browser-drive" "${DRIVE_ARGS[@]}" 2> >(cat >&2))
 DRIVE_RC=$?
 set -e
+BROWSER_STATE_SUMMARY=$(printf '%s\n' "$REPLY_BODY" | awk '/^BROWSER_STATE_SUMMARY:/{sub(/^BROWSER_STATE_SUMMARY:/,""); print; exit}')
 if [ "$DRIVE_RC" -eq 3 ]; then
   printf '%s\n' "$REPLY_BODY"
   echo "project_name: $PROJECT"
   echo "run_id: $RUN_ID"
   echo "request_file: $REQ"
+  if [ -n "$BROWSER_STATE_SUMMARY" ]; then
+    echo "browser_state: $BROWSER_STATE_SUMMARY"
+  fi
   if printf '%s\n' "$REPLY_BODY" | grep -qx 'FALLBACK:login required'; then
     maybe_open_login "$REPLY_BODY"
   else
     # 送信は済んだが取得できなかった場合、答えis生成中のままブラウザに残っている
     # 可能性が高い。生成完了後に recover で確実に救える（生成待ちと永続化を分離）。
-    echo "STILL_GENERATING: ChatGPT が生成中の可能性。回答末尾に [[DONE-$RUN_ID]] が出てから次で保存できます:"
+    if printf '%s\n' "$REPLY_BODY" | grep -qx 'FALLBACK:response still generating' \
+      || printf '%s\n' "$BROWSER_STATE_SUMMARY" | grep -qi 'generating'; then
+      echo "STILL_GENERATING: ChatGPT がまだ生成中です。browser_state を確認し、[[DONE-$RUN_ID]] 出現後に recover してください:"
+    else
+      echo "STILL_GENERATING: 自動取得に失敗しました。browser_state を確認し、回答末尾に [[DONE-$RUN_ID]] が出てから recover してください:"
+    fi
     echo "recover: pro-review-recover $PROJECT $RUN_ID"
   fi
   echo "manual_save: printf '%s' '<reply>' | pro-review-save-reply $PROJECT $RUN_ID"

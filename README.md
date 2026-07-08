@@ -497,4 +497,13 @@ rm -rf ~/.pro-review/reports/<project>
 | [SETUP-layer2.md](SETUP-layer2.md) | Path B / Tunnel 設定 |
 | [docs/spec/00-project-spec.md](docs/spec/00-project-spec.md) | 仕様 |
 | [docs/manual-checklist.md](docs/manual-checklist.md) | 実機 smoke の記録 |
+| [docs/oracle-adoptions.md](docs/oracle-adoptions.md) | Oracle から取り込んだ browser パターン |
 | [Plans.md](Plans.md) | 実装計画と完了履歴 |
+
+## Cursor から使う
+
+1. この repo を Cursor で開く（`/gpt-pro-review` コマンドが使える）
+2. `scripts/pro-review-doctor` → Path A/B を実行
+3. `exit 3` 時は `browser_state:` を読み、完了後 `scripts/pro-review-recover <project> <run_id>`
+
+詳細: [`AGENTS.md`](AGENTS.md)、[`.cursor/skills/gpt-pro-review/SKILL.md`](.cursor/skills/gpt-pro-review/SKILL.md)

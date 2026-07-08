@@ -160,6 +160,18 @@ bash tests/run-all.sh
 fixture では Path A / Path B nodriver connector / MCP hardening / report bundle / summary / doctor を検証する。
 実 ChatGPT の manual e2e は `docs/manual-checklist.md` に記録する。
 
+## Cursor
+
+- プロジェクト内: `/gpt-pro-review`（[`.cursor/commands/gpt-pro-review.md`](.cursor/commands/gpt-pro-review.md)）
+- スキル: [`.cursor/skills/gpt-pro-review/SKILL.md`](.cursor/skills/gpt-pro-review/SKILL.md)（正本は本 `SKILL.md`）
+- エージェント向け: [`AGENTS.md`](AGENTS.md)
+
+Live 実行は **フォアグラウンド + GUI Chrome** が必要。timeout 時は stdout の `browser_state:` / `BROWSER_STATE_SUMMARY` で生成中か copy 可能かを判断し、完了後 `pro-review-recover` する。判断できない場合はユーザーに確認する。
+
+## Oracle 参考
+
+ブラウザ automation の改善は sibling [oracle](https://github.com/steipete/oracle) を参照。`bash scripts/sync-oracle-reference.sh` で `vendor/oracle/SYNCED_COMMIT` を更新。採用一覧は [`docs/oracle-adoptions.md`](docs/oracle-adoptions.md)。
+
 ## 非目標
 
 - OpenAI API route への pivot

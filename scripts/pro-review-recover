@@ -18,11 +18,11 @@ BASE="$HOME/.pro-review"
 
 PROJECT="${1:?usage: pro-review-recover <project> <run_id> [--timeout sec] [--fixture-reply file]}"; shift
 RUN_ID="${1:?usage: pro-review-recover <project> <run_id> [--timeout sec] [--fixture-reply file]}"; shift
-TIMEOUT="120"
+TIMEOUT="${TIMEOUT:-600}"
 FIXTURE_REPLY=""
 while [ "${1:-}" ]; do
   case "$1" in
-    --timeout) TIMEOUT="${2:-120}"; shift 2;;
+    --timeout) TIMEOUT="${2:-600}"; shift 2;;
     --fixture-reply) FIXTURE_REPLY="${2:-}"; shift 2;;
     *) echo "usage: pro-review-recover <project> <run_id> [--timeout sec] [--fixture-reply file]" >&2; exit 2;;
   esac
