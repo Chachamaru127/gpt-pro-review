@@ -431,3 +431,12 @@ Issue #1 のうち Phase 8 でスコープ外にした項目を別スライス�
 - copy: copy button 未検出 → DOM fallback で回収 ✅
 - report_bundle: `~/.pro-review/reports/phase10-live-1783500846/1783500846448-390dc8` ✅
 - tests: `bash tests/run-all.sh` pass=30 fail=0（T8 環境依存修正込み）
+
+## Phase 10.1: copy scroll + download-flood guard（2026-07-09）
+
+| Task | 内容 | Status |
+|------|------|--------|
+| 10.1.1 | 会話内側コンテナを `scrollTop=scrollHeight` してから copy | cc:完了 |
+| 10.1.2 | Oracle `copy-turn-action-button` 優先。親探索禁止。user/download 除外 | cc:完了 |
+| 10.1.3 | `~/Downloads` 連打検知で即停止（download flood guard） | cc:完了 |
+| 10.1.4 | live: `copy-ok-1783563428` → `reply via copy button`、Downloads 0 | cc:完了 |

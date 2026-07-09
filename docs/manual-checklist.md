@@ -40,6 +40,20 @@ fixture では検証済み。以下は実 ChatGPT でのみ確認できる live 
 - copy: ⚠ copy button not found → DOM fallback で回収成功（コピー主経路は未達、fallback で完了）
 - report bundle: ✅ `~/.pro-review/reports/phase10-live-1783500846/1783500846448-390dc8`
 - unresolved: コピーボタンセレクタの ChatGPT UI 追従（DOM fallback で回避可能）
+- follow-up (2026-07-09): `SCROLL_CONVERSATION_BOTTOM_JS` を追加。会話内側コンテナを `scrollTop=scrollHeight` してから copy 探索。
+- incident: sibling/parent 探索を広げすぎて **user 添付の download を連打**し、`~/Downloads` に packet.md が 100+ 件増えた。修正: 探索を assistant turn 内(+直後 sibling のみ)に限定し、download/user 領域を除外。
+- live success (2026-07-09): `copy-ok-1783563428` / `copy clicked via=copy-turn-action-button` → `reply via copy button`、Downloads 0 件。
+
+## Path A live verify: conversation bottom scroll before copy (2026-07-09)
+
+- date: 2026-07-09
+- project: `copy-ok-1783563428`
+- run_id: `1783563428221-4eda70`
+- scroll log: ✅ `scroll bottom` / generating liveness
+- copy path: ✅ `copy clicked via=copy-turn-action-button` → `reply via copy button`
+- download flood: ✅ `~/Downloads` に packet 0 件（誤クリックなし）
+- report bundle: ✅ `~/.pro-review/reports/copy-ok-1783563428/1783563428221-4eda70`
+- notes: Oracle 正本セレクタ優先 + download flood guard。親探索禁止。
 
 ## Path B: non-5.5Pro + Tunnel
 

@@ -15,6 +15,7 @@ Oracle（`../oracle`）は ChatGPT/Gemini ブラウザ automation の成熟実�
 | `promptComposer.ts` — composer-scoped send button | `CLICK_SEND_JS` scope to composer/form | サイドバー誤クリック防止 |
 | `attachments.ts` — filename evidence | `wait_attachment_evidence()` | 添付未確認の loud warning |
 | `docs/agents.md` — Cursor command/skill | `.cursor/commands/gpt-pro-review.md`, `.cursor/skills/`, `AGENTS.md` | Cursor から同ワークフロー |
+| conversation inner scroll (live lesson) | `SCROLL_CONVERSATION_BOTTOM_JS` + assistant-scoped copy | `window.scrollTo` だけではコピーに届かない。overflow を `scrollTop=scrollHeight`。探索を親まで広げると user 添付 download を連打するので禁止 |
 
 ## 意図的に採用しない
 

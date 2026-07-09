@@ -923,35 +923,151 @@ def read_clipboard():
     return out.stdout.decode("utf-8", "replace")
 
 
+def count_download_matches(stem):
+    """~/Downloads 内で stem に一致するファイル数。誤クリック download 連打の検知用。"""
+    if not stem:
+        return 0
+    downloads = os.path.expanduser("~/Downloads")
+    if not os.path.isdir(downloads):
+        return 0
+    try:
+        names = os.listdir(downloads)
+    except OSError:
+        return 0
+    return sum(1 for name in names if name.startswith(stem))
+
+
+def download_guard_stem(request_file):
+    """添付 packet の basename stem（拡張子なし）。Downloads 連打検知のキー。"""
+    if not request_file:
+        return None
+    base = os.path.basename(request_file)
+    if not base:
+        return None
+    stem, _ext = os.path.splitext(base)
+    return stem or None
+
+
+# ChatGPT の会話は window ではなく内側コンテナがスクロールする。
+# window.scrollTo だけでは最下部のコピーボタンに届かないことがある。
+SCROLL_CONVERSATION_BOTTOM_JS = """
+(() => {
+  const turns = [...document.querySelectorAll('[data-message-author-role="assistant"]')];
+  const last = turns.length ? turns[turns.length - 1] : null;
+  const roots = [
+    document.querySelector('[data-testid="chat-thread"]'),
+    document.querySelector('section[data-testid="screen-threadFlyOut"]'),
+    document.querySelector('main'),
+    document.querySelector('[role="main"]'),
+  ].filter(Boolean);
+  const candidates = new Set(roots);
+  let el = last;
+  while (el && el !== document.body && el !== document.documentElement) {
+    try {
+      const style = window.getComputedStyle(el);
+      const oy = style.overflowY || '';
+      if (
+        (oy === 'auto' || oy === 'scroll' || oy === 'overlay') &&
+        el.scrollHeight > el.clientHeight + 8
+      ) {
+        candidates.add(el);
+      }
+    } catch (_) {}
+    el = el.parentElement;
+  }
+  let scrolled = 0;
+  for (const node of candidates) {
+    try {
+      const before = node.scrollTop;
+      node.scrollTop = node.scrollHeight;
+      if (node.scrollTop !== before) scrolled += 1;
+    } catch (_) {}
+  }
+  if (last) {
+    try {
+      last.scrollIntoView({ block: 'end', inline: 'nearest' });
+    } catch (_) {}
+  }
+  try {
+    const h = Math.max(
+      document.body ? document.body.scrollHeight : 0,
+      document.documentElement ? document.documentElement.scrollHeight : 0
+    );
+    window.scrollTo(0, h);
+  } catch (_) {}
+  return { scrolledContainers: scrolled, hasAssistant: Boolean(last) };
+})()
+"""
+
+
 # 最後の assistant 回答の「コピー」ボタンを押す。ChatGPT は整形済み Markdown を
 # OS クリップボードに入れるので、DOM 解析より取りこぼしが少ない。
+# Oracle: button[data-testid="copy-turn-action-button"] が正本。
+# 探索は最後の assistant turn 内(+直後 sibling)のみ。親へ広げると user 添付の
+# download を誤クリックし Downloads に packet が連打される（2026-07-09 実機事故）。
 COPY_LAST_REPLY_JS = """
 (() => {
   const norm = (s) => String(s || '').replace(/\\s+/g, ' ').trim().toLowerCase();
   const turns = [...document.querySelectorAll('[data-message-author-role="assistant"]')];
   if (!turns.length) return { ok: false, reason: 'no assistant message' };
   const last = turns[turns.length - 1];
-  // copy ボタンが遅延マウントされる/表示領域外だと拾えないことがあるため、
-  // 探す前に必ず最終回答まで(要素単位・ページ単位の両方で)スクロールする。
-  last.scrollIntoView({ block: 'end' });
-  window.scrollTo(0, document.body.scrollHeight);
-  // 回答ブロック自身か、その近傍(article/turn 単位)から copy ボタンを探す
-  const scope = last.closest('article') || last.parentElement || last;
-  const buttons = [...scope.querySelectorAll('button,[role="button"]')];
+  const article =
+    last.closest('article') ||
+    last.closest('[data-testid*="conversation-turn"]') ||
+    last.closest('[data-turn]') ||
+    last;
+  const scopes = [last, article];
+  let sib = article.nextElementSibling;
+  for (let i = 0; i < 2 && sib; i += 1, sib = sib.nextElementSibling) {
+    if (sib.querySelector?.('[data-message-author-role="user"]')) break;
+    if (sib.getAttribute?.('data-message-author-role') === 'user') break;
+    scopes.push(sib);
+  }
+  const inUser = (el) => Boolean(el.closest('[data-message-author-role="user"]'));
+  // 1) Oracle 正本セレクタを最優先
+  for (const scope of scopes) {
+    if (!scope) continue;
+    const official = [...scope.querySelectorAll('button[data-testid="copy-turn-action-button"]')]
+      .filter((el) => !inUser(el));
+    if (official.length) {
+      const btn = official[official.length - 1];
+      try { btn.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (_) {}
+      btn.click();
+      return { ok: true, via: 'copy-turn-action-button' };
+    }
+  }
+  // 2) ラベル fallback（download / code copy / user 領域は除外）
+  const seen = new Set();
+  const buttons = [];
+  for (const scope of scopes) {
+    if (!scope) continue;
+    for (const el of scope.querySelectorAll('button,[role="button"]')) {
+      if (seen.has(el)) continue;
+      seen.add(el);
+      buttons.push(el);
+    }
+  }
+  const labelOf = (el) => norm([
+    el.getAttribute('aria-label'),
+    el.getAttribute('data-testid'),
+    el.getAttribute('title'),
+    el.textContent
+  ].filter(Boolean).join(' '));
   const isCopy = (el) => {
-    const label = norm([
-      el.getAttribute('aria-label'),
-      el.getAttribute('data-testid'),
-      el.getAttribute('title'),
-      el.textContent
-    ].filter(Boolean).join(' '));
+    if (inUser(el)) return false;
+    if (el.hasAttribute('download')) return false;
+    const label = labelOf(el);
     if (!label) return false;
-    return /copy|コピー/.test(label) && !/code|コード/.test(label);
+    if (/download|ダウンロード|保存して|save file|添付/.test(label)) return false;
+    if (/code|コード/.test(label)) return false;
+    return /\\bcopy\\b|コピー|copy response|copy message|メッセージをコピー|copy-turn-action/.test(label);
   };
-  const btn = buttons.find(isCopy);
-  if (!btn) return { ok: false, reason: 'copy button not found' };
+  const matches = buttons.filter(isCopy);
+  const btn = matches.length ? matches[matches.length - 1] : null;
+  if (!btn) return { ok: false, reason: 'copy button not found', scopes: scopes.length };
+  try { btn.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (_) {}
   btn.click();
-  return { ok: true };
+  return { ok: true, via: 'assistant-copy-label' };
 })()
 """
 
@@ -1021,16 +1137,49 @@ BROWSER_STATE_JS = """
   );
   let copyButtonVisible = false;
   if (last) {
-    const scope = last.closest('article') || last.parentElement || last;
-    const buttons = [...scope.querySelectorAll('button,[role="button"]')];
-    copyButtonVisible = buttons.some((btn) => {
-      const label = norm([
-        btn.getAttribute('aria-label'),
-        btn.getAttribute('data-testid'),
-        btn.textContent
-      ].filter(Boolean).join(' '));
-      return /copy|コピー/.test(label) && !/code|コード/.test(label);
-    });
+    const article =
+      last.closest('article') ||
+      last.closest('[data-testid*="conversation-turn"]') ||
+      last.closest('[data-turn]') ||
+      last;
+    const scopes = [last, article];
+    let sib = article.nextElementSibling;
+    for (let i = 0; i < 2 && sib; i += 1, sib = sib.nextElementSibling) {
+      if (sib.querySelector?.('[data-message-author-role="user"]')) break;
+      if (sib.getAttribute?.('data-message-author-role') === 'user') break;
+      scopes.push(sib);
+    }
+    for (const scope of scopes) {
+      if (!scope) continue;
+      if (scope.querySelector('button[data-testid="copy-turn-action-button"]')) {
+        copyButtonVisible = true;
+        break;
+      }
+    }
+    if (!copyButtonVisible) {
+      const seen = new Set();
+      const buttons = [];
+      for (const scope of scopes) {
+        if (!scope) continue;
+        for (const btn of scope.querySelectorAll('button,[role="button"]')) {
+          if (seen.has(btn)) continue;
+          seen.add(btn);
+          buttons.push(btn);
+        }
+      }
+      copyButtonVisible = buttons.some((btn) => {
+        if (btn.closest('[data-message-author-role="user"]')) return false;
+        if (btn.hasAttribute('download')) return false;
+        const label = norm([
+          btn.getAttribute('aria-label'),
+          btn.getAttribute('data-testid'),
+          btn.getAttribute('title'),
+          btn.textContent
+        ].filter(Boolean).join(' '));
+        if (/download|ダウンロード|添付/.test(label)) return false;
+        return /\\bcopy\\b|コピー/.test(label) && !/code|コード|download|ダウンロード/.test(label);
+      });
+    }
   }
   return {
     generating,
@@ -1066,13 +1215,25 @@ async def read_browser_state(page):
     return js_object(await js(page, BROWSER_STATE_JS)) or {}
 
 
-async def extract_via_copy(page, run_id, timeout):
+async def extract_via_copy(page, run_id, timeout, request_file=None):
     """コピーボタン→クリップポードで最終回答を取得し marker 検証する。"""
     deadline = time.time() + timeout
     started = time.time()
     last_error = ""
     tick = 0
+    stem = download_guard_stem(request_file)
+    baseline_downloads = count_download_matches(stem) if stem else 0
     while time.time() < deadline:
+        if stem:
+            current = count_download_matches(stem)
+            if current > baseline_downloads + 1:
+                # コピー誤クリックで packet が Downloads に連打されている。即停止。
+                sys.stderr.write(
+                    f"[pro-review-browser-drive] download flood detected:"
+                    f" {stem}* count={current} (baseline={baseline_downloads})\n"
+                )
+                state = await read_browser_state(page)
+                return None, "download flood (misclicked attachment)", state
         gen = js_object(await js(page, IS_GENERATING_JS)) or {}
         if gen.get("generating"):
             tick += 1
@@ -1088,12 +1249,22 @@ async def extract_via_copy(page, run_id, timeout):
                 )
             await page.sleep(2)
             continue
+        # 会話コンテナ(内側スクロール)を最下部へ。window.scrollTo だけでは届かない。
+        scroll_info = js_object(await js(page, SCROLL_CONVERSATION_BOTTOM_JS)) or {}
+        if tick % 5 == 0:
+            sys.stderr.write(
+                "[pro-review-browser-drive] scroll bottom:"
+                f" containers={scroll_info.get('scrolledContainers', 0)}\n"
+            )
+        await page.sleep(0.4)  # アクションバー遅延マウント待ち
         clicked = js_object(await js(page, COPY_LAST_REPLY_JS)) or {}
         if not clicked.get("ok"):
             last_error = clicked.get("reason", "copy button not found")
             sys.stderr.write(f"[pro-review-browser-drive] copy retry: {last_error}\n")
             await page.sleep(2)
             continue
+        via = clicked.get("via") or "copy"
+        sys.stderr.write(f"[pro-review-browser-drive] copy clicked via={via}\n")
         await page.sleep(0.3)  # クリップボード反映待ち
         clip = read_clipboard()
         if clip:
@@ -1136,16 +1307,21 @@ async def extract_via_dom(page, run_id, timeout):
     return None, last_error or "timeout waiting for DONE marker"
 
 
-async def extract_live_reply(page, run_id, timeout):
+async def extract_live_reply(page, run_id, timeout, request_file=None):
     """主経路=コピーボタン、失敗時に DOM 解析へフォールバック。"""
     deadline = time.time() + timeout
     # まずコピー経路に大半の時間を与え、ダメなら残り時間で DOM 経路を試す。
     copy_budget = max(timeout - 20, timeout * 0.8)
-    reply, reason, copy_state = await extract_via_copy(page, run_id, copy_budget)
+    reply, reason, copy_state = await extract_via_copy(
+        page, run_id, copy_budget, request_file=request_file
+    )
     if reply is not None:
         sys.stderr.write("[pro-review-browser-drive] reply via copy button\n")
         return reply, None, None
     if reason == "login required":
+        return None, reason, copy_state
+    if reason and "download flood" in reason:
+        # 誤クリック連打は DOM fallback でも同じボタンを押し続ける危険があるので即停止。
         return None, reason, copy_state
     remaining = max(deadline - time.time(), 5)
     sys.stderr.write(
@@ -1299,7 +1475,9 @@ async def drive_live(args):
         await page.sleep(2)
         if args.extract_only:
             # recover 用: 送信せず、開いている会話の最終回答だけ取得する。
-            reply, reason, state = await extract_live_reply(page, args.run_id, args.timeout)
+            reply, reason, state = await extract_live_reply(
+                page, args.run_id, args.timeout, request_file=args.request_file
+            )
             if reply is None:
                 return fallback(reason, state)
             print(reply)
@@ -1409,7 +1587,9 @@ async def drive_live(args):
             if args.mode == "connector":
                 print(f"connector_label: {args.connector_label}")
             return 0
-        reply, reason, state = await extract_live_reply(page, args.run_id, args.timeout)
+        reply, reason, state = await extract_live_reply(
+            page, args.run_id, args.timeout, request_file=args.request_file
+        )
         if reply is None:
             return fallback(reason, state)
         print(reply)

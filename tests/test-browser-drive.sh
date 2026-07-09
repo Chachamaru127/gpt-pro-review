@@ -248,4 +248,40 @@ assert "--send-only" in src
 PY
 assert_exit_ok "$?" "T13 connector mode source contract"
 
+python3 - "$DRV" <<'PY'
+import importlib.machinery
+import sys
+mod = importlib.machinery.SourceFileLoader("pro_review_browser_drive_scroll", sys.argv[1]).load_module()
+scroll = mod.SCROLL_CONVERSATION_BOTTOM_JS
+copy = mod.COPY_LAST_REPLY_JS
+src = open(sys.argv[1], encoding="utf-8").read()
+# 内側スクロールコンテナを最下部へ（window.scrollTo だけでは不足）
+assert "scrollTop" in scroll and "scrollHeight" in scroll
+assert "overflowY" in scroll
+assert "chat-thread" in scroll
+# コピー探索は sibling アクションバーまで広げるが、親/user 添付は触らない
+assert "nextElementSibling" in copy
+assert "scrollIntoView" in copy
+assert "copy-turn-action-button" in copy  # Oracle 正本セレクタ
+assert "download" in copy  # downloadish 除外
+assert 'data-message-author-role="user"' in copy
+assert "親へ広げると" in src or "parentElement まで広げると" in src
+assert "scopes.push(article.parentElement)" not in copy
+# extract_via_copy がスクロール→待機→コピーの順
+assert "SCROLL_CONVERSATION_BOTTOM_JS" in src
+assert "scroll bottom:" in src
+assert "download flood" in src
+assert "count_download_matches" in src
+extract = src[src.index("async def extract_via_copy") : src.index("async def extract_via_dom")]
+assert extract.index("SCROLL_CONVERSATION_BOTTOM_JS") < extract.index("COPY_LAST_REPLY_JS")
+assert "await page.sleep(0.4)" in extract
+# 回帰: parent 探索で download 連打した事故を再発させない
+copy_block = src[src.index("COPY_LAST_REPLY_JS") : src.index("IS_GENERATING_JS")]
+assert "scopes.push(article.parentElement)" not in copy_block
+# download guard unit
+assert mod.count_download_matches("") == 0
+assert mod.download_guard_stem("/tmp/foo/bar-packet.md") == "bar-packet"
+PY
+assert_exit_ok "$?" "T14 conversation bottom scroll before copy"
+
 echo "[test-browser-drive] PASS"
