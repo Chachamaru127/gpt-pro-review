@@ -43,6 +43,11 @@ fixture では検証済み。以下は実 ChatGPT でのみ確認できる live 
 - follow-up (2026-07-09): `SCROLL_CONVERSATION_BOTTOM_JS` を追加。会話内側コンテナを `scrollTop=scrollHeight` してから copy 探索。
 - incident: sibling/parent 探索を広げすぎて **user 添付の download を連打**し、`~/Downloads` に packet.md が 100+ 件増えた。修正: 探索を assistant turn 内(+直後 sibling のみ)に限定し、download/user 領域を除外。
 - live success (2026-07-09): `copy-ok-1783563428` / `copy clicked via=copy-turn-action-button` → `reply via copy button`、Downloads 0 件。
+  - **訂正**: この成功は人間の手動コピーの可能性が高い（`copy clicked` 連打のあと clipboard が埋まった）。
+- live success real (2026-07-09): `copy-intercept-1783563887`
+  - `copy clicked via=copy-turn-action-button intercepted=yes`（1回）
+  - `reply via copy button` / Downloads 0 / 手動操作なし
+  - 修正: clipboard intercept + pointer/mouse click sequence（Oracle 方式）
 
 ## Path A live verify: conversation bottom scroll before copy (2026-07-09)
 

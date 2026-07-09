@@ -1005,11 +1005,31 @@ SCROLL_CONVERSATION_BOTTOM_JS = """
 # Oracle: button[data-testid="copy-turn-action-button"] が正本。
 # 探索は最後の assistant turn 内(+直後 sibling)のみ。親へ広げると user 添付の
 # download を誤クリックし Downloads に packet が連打される（2026-07-09 実機事故）。
+# クリックは pointer/mouse シーケンス + clipboard intercept。単純 click()+pbpaste だと
+# 自動化コンテキストで clipboard が空のまま連打される（人間の手動コピーで「成功」に見えた）。
 COPY_LAST_REPLY_JS = """
 (() => {
   const norm = (s) => String(s || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+  const TIMEOUT_MS = 8000;
+
+  function dispatchClickSequence(target) {
+    if (!target || !(target instanceof EventTarget)) return false;
+    const types = ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'];
+    for (const type of types) {
+      const common = { bubbles: true, cancelable: true, view: window };
+      let event;
+      if (type.startsWith('pointer') && 'PointerEvent' in window) {
+        event = new PointerEvent(type, { ...common, pointerId: 1, pointerType: 'mouse' });
+      } else {
+        event = new MouseEvent(type, common);
+      }
+      target.dispatchEvent(event);
+    }
+    return true;
+  }
+
   const turns = [...document.querySelectorAll('[data-message-author-role="assistant"]')];
-  if (!turns.length) return { ok: false, reason: 'no assistant message' };
+  if (!turns.length) return Promise.resolve({ ok: false, reason: 'no assistant message' });
   const last = turns[turns.length - 1];
   const article =
     last.closest('article') ||
@@ -1024,50 +1044,130 @@ COPY_LAST_REPLY_JS = """
     scopes.push(sib);
   }
   const inUser = (el) => Boolean(el.closest('[data-message-author-role="user"]'));
-  // 1) Oracle 正本セレクタを最優先
+
+  let btn = null;
+  let via = '';
   for (const scope of scopes) {
     if (!scope) continue;
     const official = [...scope.querySelectorAll('button[data-testid="copy-turn-action-button"]')]
       .filter((el) => !inUser(el));
     if (official.length) {
-      const btn = official[official.length - 1];
-      try { btn.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (_) {}
-      btn.click();
-      return { ok: true, via: 'copy-turn-action-button' };
+      btn = official[official.length - 1];
+      via = 'copy-turn-action-button';
+      break;
     }
   }
-  // 2) ラベル fallback（download / code copy / user 領域は除外）
-  const seen = new Set();
-  const buttons = [];
-  for (const scope of scopes) {
-    if (!scope) continue;
-    for (const el of scope.querySelectorAll('button,[role="button"]')) {
-      if (seen.has(el)) continue;
-      seen.add(el);
-      buttons.push(el);
+  if (!btn) {
+    const seen = new Set();
+    const buttons = [];
+    for (const scope of scopes) {
+      if (!scope) continue;
+      for (const el of scope.querySelectorAll('button,[role="button"]')) {
+        if (seen.has(el)) continue;
+        seen.add(el);
+        buttons.push(el);
+      }
+    }
+    const labelOf = (el) => norm([
+      el.getAttribute('aria-label'),
+      el.getAttribute('data-testid'),
+      el.getAttribute('title'),
+      el.textContent
+    ].filter(Boolean).join(' '));
+    const matches = buttons.filter((el) => {
+      if (inUser(el)) return false;
+      if (el.hasAttribute('download')) return false;
+      const label = labelOf(el);
+      if (!label) return false;
+      if (/download|ダウンロード|保存して|save file|添付/.test(label)) return false;
+      if (/code|コード/.test(label)) return false;
+      return /\\bcopy\\b|コピー|copy response|copy message|メッセージをコピー|copy-turn-action/.test(label);
+    });
+    if (matches.length) {
+      btn = matches[matches.length - 1];
+      via = 'assistant-copy-label';
     }
   }
-  const labelOf = (el) => norm([
-    el.getAttribute('aria-label'),
-    el.getAttribute('data-testid'),
-    el.getAttribute('title'),
-    el.textContent
-  ].filter(Boolean).join(' '));
-  const isCopy = (el) => {
-    if (inUser(el)) return false;
-    if (el.hasAttribute('download')) return false;
-    const label = labelOf(el);
-    if (!label) return false;
-    if (/download|ダウンロード|保存して|save file|添付/.test(label)) return false;
-    if (/code|コード/.test(label)) return false;
-    return /\\bcopy\\b|コピー|copy response|copy message|メッセージをコピー|copy-turn-action/.test(label);
-  };
-  const matches = buttons.filter(isCopy);
-  const btn = matches.length ? matches[matches.length - 1] : null;
-  if (!btn) return { ok: false, reason: 'copy button not found', scopes: scopes.length };
-  try { btn.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (_) {}
-  btn.click();
-  return { ok: true, via: 'assistant-copy-label' };
+  if (!btn) {
+    return Promise.resolve({ ok: false, reason: 'copy button not found', scopes: scopes.length });
+  }
+
+  const clipboard = navigator.clipboard;
+  const state = { text: '', updatedAt: 0 };
+  let restore = () => {};
+  if (clipboard) {
+    const originalWriteText = clipboard.writeText?.bind(clipboard);
+    const originalWrite = clipboard.write?.bind(clipboard);
+    clipboard.writeText = (value) => {
+      state.text = typeof value === 'string' ? value : '';
+      state.updatedAt = Date.now();
+      return Promise.resolve();
+    };
+    clipboard.write = async (items) => {
+      try {
+        const list = Array.isArray(items) ? items : items ? [items] : [];
+        for (const item of list) {
+          if (!item) continue;
+          const types = Array.isArray(item.types) ? item.types : [];
+          if (types.includes('text/plain') && typeof item.getType === 'function') {
+            const blob = await item.getType('text/plain');
+            state.text = (await blob.text()) ?? '';
+            state.updatedAt = Date.now();
+            break;
+          }
+        }
+      } catch (_) {
+        state.text = '';
+        state.updatedAt = Date.now();
+      }
+      return Promise.resolve();
+    };
+    restore = () => {
+      if (originalWriteText) clipboard.writeText = originalWriteText;
+      if (originalWrite) clipboard.write = originalWrite;
+    };
+  }
+
+  return new Promise((resolve) => {
+    let settled = false;
+    let pollId = null;
+    let timeoutId = null;
+    const finish = (payload) => {
+      if (settled) return;
+      settled = true;
+      if (pollId) clearInterval(pollId);
+      if (timeoutId) clearTimeout(timeoutId);
+      try { restore(); } catch (_) {}
+      resolve(payload);
+    };
+    let lastText = '';
+    let stableTicks = 0;
+    const maybeFinish = () => {
+      const markdown = state.text || '';
+      if (!markdown.trim()) return;
+      if (markdown !== lastText) {
+        lastText = markdown;
+        stableTicks = 0;
+        return;
+      }
+      stableTicks += 1;
+      const ageMs = Date.now() - (state.updatedAt || 0);
+      if (stableTicks >= 3 && ageMs >= 250) {
+        finish({ ok: true, via, markdown, intercepted: true });
+      }
+    };
+    try { btn.scrollIntoView({ block: 'center', behavior: 'instant' }); } catch (_) {}
+    dispatchClickSequence(btn);
+    pollId = setInterval(maybeFinish, 120);
+    timeoutId = setTimeout(() => {
+      finish({
+        ok: false,
+        reason: state.text ? 'clipboard unstable' : 'clipboard empty after copy',
+        via,
+        intercepted: Boolean(state.text),
+      });
+    }, TIMEOUT_MS);
+  });
 })()
 """
 
@@ -1264,9 +1364,18 @@ async def extract_via_copy(page, run_id, timeout, request_file=None):
             await page.sleep(2)
             continue
         via = clicked.get("via") or "copy"
-        sys.stderr.write(f"[pro-review-browser-drive] copy clicked via={via}\n")
-        await page.sleep(0.3)  # クリップボード反映待ち
-        clip = read_clipboard()
+        intercepted = bool(clicked.get("intercepted"))
+        sys.stderr.write(
+            f"[pro-review-browser-drive] copy clicked via={via}"
+            f" intercepted={'yes' if intercepted else 'no'}\n"
+        )
+        # 優先: JS 内 clipboard intercept の本文。失敗時のみ OS pbpaste にフォールバック。
+        clip = clicked.get("markdown") if intercepted else None
+        if not clip:
+            await page.sleep(0.3)
+            clip = read_clipboard()
+            if clip:
+                sys.stderr.write("[pro-review-browser-drive] clipboard via pbpaste fallback\n")
         if clip:
             if is_answer_now_placeholder(clip):
                 last_error = "assistant placeholder (answer now / pro thinking)"
@@ -1281,6 +1390,9 @@ async def extract_via_copy(page, run_id, timeout, request_file=None):
                 last_error = str(exc)
         else:
             last_error = "clipboard empty after copy"
+            sys.stderr.write(
+                f"[pro-review-browser-drive] copy retry: {last_error}\n"
+            )
         await page.sleep(2)
     state = await read_browser_state(page)
     if state.get("generating"):

@@ -265,6 +265,9 @@ assert "scrollIntoView" in copy
 assert "copy-turn-action-button" in copy  # Oracle 正本セレクタ
 assert "download" in copy  # downloadish 除外
 assert 'data-message-author-role="user"' in copy
+assert "dispatchClickSequence" in copy
+assert "clipboard.writeText" in copy or "clipboard.writeText =" in copy
+assert "intercepted" in copy
 assert "親へ広げると" in src or "parentElement まで広げると" in src
 assert "scopes.push(article.parentElement)" not in copy
 # extract_via_copy がスクロール→待機→コピーの順
@@ -272,9 +275,12 @@ assert "SCROLL_CONVERSATION_BOTTOM_JS" in src
 assert "scroll bottom:" in src
 assert "download flood" in src
 assert "count_download_matches" in src
+assert "intercepted" in src
+assert "pbpaste fallback" in src
 extract = src[src.index("async def extract_via_copy") : src.index("async def extract_via_dom")]
 assert extract.index("SCROLL_CONVERSATION_BOTTOM_JS") < extract.index("COPY_LAST_REPLY_JS")
 assert "await page.sleep(0.4)" in extract
+assert 'clicked.get("markdown")' in extract or "clicked.get('markdown')" in extract
 # 回帰: parent 探索で download 連打した事故を再発させない
 copy_block = src[src.index("COPY_LAST_REPLY_JS") : src.index("IS_GENERATING_JS")]
 assert "scopes.push(article.parentElement)" not in copy_block

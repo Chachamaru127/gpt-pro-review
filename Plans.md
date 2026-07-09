@@ -439,4 +439,5 @@ Issue #1 のうち Phase 8 でスコープ外にした項目を別スライス�
 | 10.1.1 | 会話内側コンテナを `scrollTop=scrollHeight` してから copy | cc:完了 |
 | 10.1.2 | Oracle `copy-turn-action-button` 優先。親探索禁止。user/download 除外 | cc:完了 |
 | 10.1.3 | `~/Downloads` 連打検知で即停止（download flood guard） | cc:完了 |
-| 10.1.4 | live: `copy-ok-1783563428` → `reply via copy button`、Downloads 0 | cc:完了 |
+| 10.1.4 | live: `copy-ok-1783563428` → `reply via copy button`、Downloads 0 | cc:完了（後に手動コピー疑いと判明） |
+| 10.1.5 | clipboard intercept + click sequence（Oracle）。`copy-intercept-1783563887` で `intercepted=yes` 1回成功 | cc:完了 |
