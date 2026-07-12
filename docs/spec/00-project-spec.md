@@ -35,6 +35,16 @@ gpt-pro-review は、Claude/Codex が自分だけで結論を出す前に、Chat
 
 `search` / `fetch` が ChatGPT surface 側で利用できない場合はレビューせず、`STOP_REASON=connector_unavailable` を返す。`search` / `fetch` は使えるが `save_report` だけ利用できない場合だけ、fallback として nodriver DOM 抽出 → `pro-review-save-reply` で同じ inbox へ保存する。
 
+### Workflow C: multi-round re-review（followup）
+
+1. Agent が前回 run の findings（安定 ID 付き）と、その後の修正 diff から followup packet を作る。
+2. Agent が **新規会話** として Path A で送信する（既存会話への reattach はしない）。
+3. ChatGPT が finding ID ごとに `resolved` / `still-open` / `new` を判定して回答する。
+4. Agent が回答を回収し、findings ledger に追記する。
+5. Claude が分類し、`$easy` 形式で報告する。
+
+各 round は独立した run_id を持ち、`metadata.json` の `previous_run_id` で連結する。
+
 ## Core Rules
 
 - API route は使わない。
@@ -53,6 +63,12 @@ gpt-pro-review は、Claude/Codex が自分だけで結論を出す前に、Chat
 - CH/GIFT 文脈、顧客名、codename、SF field 名などはこの skill の product contract に入れない。
 - 外部送信前に secret scan / denylist を通す。
 - `.harness-mem/`, browser profile, venv, secrets, inbox, reports は git に入れない。
+- followup（Workflow C）は毎 round 新規会話で送る。既存会話への session reattach / tab lease は採用しない。
+- findings は安定 ID（内容ベース。並び替え・再要約で変わらない）を持つ。ID は followup 判定と ledger 追記の主キーになる。
+- findings ledger の採用率・誤検知率は「Claude/ユーザーの受容の proxy 指標」であり、客観的な正誤ではないことを表示に明記する。
+- fallback / timeout 時の診断 artifact（DOM 抜粋・screenshot）は `reports/<project>/<run_id>/` 配下に `chmod 600` で保存する。umask 継承には依存しない。
+- `metadata.json` に保存する会話 URL は、保存時・使用時の双方で host が `chatgpt.com` であることを検証する。検証に失敗したら使わず止まる。
+- consensus 比較は「2 つの findings JSON を突き合わせて agreed / disputed を出すローカルユーティリティ」までとする。GPR 自身が他の agent（Codex 等）を起動しない。第二レビューの取得は呼び出し元 agent の責務。
 
 ## Data And Contracts
 
@@ -60,7 +76,8 @@ gpt-pro-review は、Claude/Codex が自分だけで結論を出す前に、Chat
 |---|---|---|
 | `~/.pro-review/workspace/<project>/` | ChatGPT に見せる read-only snapshot | 一時 |
 | `~/.pro-review/inbox/<project>/` | 回答受け取り口。Path B では `save_report` がここに書く | 一時 |
-| `~/.pro-review/reports/<project>/<run_id>/` | request / reply / summary / easy report / metadata の最終レビュー記録 | 永続 |
+| `~/.pro-review/reports/<project>/<run_id>/` | request / reply / summary / easy report / metadata / 診断 artifact の最終レビュー記録 | 永続 |
+| `~/.pro-review/ledger/<project>.jsonl` | findings ledger（finding ID・round・分類・採用判断の追記ログ、chmod 600） | 永続 |
 | `docs/spec/00-project-spec.md` | target product contract | git 管理 |
 | `Plans.md` | task contract | git 管理 |
 | `SKILL.md` | 実装後の user-facing contract | git 管理 |
@@ -74,6 +91,10 @@ gpt-pro-review は、Claude/Codex が自分だけで結論を出す前に、Chat
 - ChatGPT 回答を自動でコードに適用すること。
 - ChatGPT へ汎用 filesystem write/edit や shell 実行を既定公開すること。
 - secret 値を読むこと。
+- 無人スケジュール実行（launchd/cron nightly review）。GUI Chrome 必須（headless 非対応）・ログイン失効・消費者不在のため成立しない（2026-07-12 判断）。
+- 非 OpenAI 宛の外部送信（Slack / PR コメント等へのレビュー共有）。単一ユーザー設計と衝突し、新しい外部送信面・認証面を増やすため（2026-07-12 判断）。
+- 実行回数の強制上限（quota cap / pacing 強制）。BAN risk 評価の Non-Goal と衝突。観測用の実行回数表示までは可。
+- GPR 自身によるマルチエージェント起動（Codex 呼び出し等の orchestration）。
 
 ## Competitive Research Snapshot
 
@@ -87,6 +108,16 @@ gpt-pro-review は、Claude/Codex が自分だけで結論を出す前に、Chat
 | `rebel0789/codexpro` | Developer Mode MCP write/edit、tool mode、token auth、setup/start profile、safe write controls | `save_report` first と tool-mode/Risk Gate に反映 |
 
 結論: アーキテクチャは維持する。競合のような汎用 coding bridge には寄せず、`gpt-pro-review` は review/save/report に狭く保つ。改善は UX、安全な `save_report`、receipt、doctor、stop reason に限定する。
+
+### Market gap research（2026-07-12 追記）
+
+grok（Web/X）+ Claude WebSearch のクロス調査で、A 系（agent → ChatGPT Web second opinion）市場の未充足を確認した。
+
+- Oracle（steipete、3.2k stars）が旗艦だが、リリースの大半が ChatGPT UI 追従修正に費やされ、multi-round review の契約化・finding 追跡は持たない。
+- 全競合（Oracle / Pro Line / codex-chatgpt-control / DevSpace / CodexPro）が製品化していない領域: 契約化された multi-round review、finding 単位の status ledger、採用率・誤検知の追跡。
+- GPR は secret scan / snapshot isolation / bounded tools / report bundle で安全側の差別化を既に持つ。
+
+採用判断: 差別化投資は「multi-round review protocol + findings ledger」（Workflow C）に集中する。scheduled 実行・チーム共有・quota 強制は市場ギャップとして実在するが、GPR の単一ユーザー・狭スコープ原則と衝突するため Non-Goals に明記して見送る。
 
 ## Acceptance
 
@@ -102,3 +133,6 @@ gpt-pro-review は、Claude/Codex が自分だけで結論を出す前に、Chat
 
 - nodriver の DOM selector は実機で再ピンする必要がある。
 - 統合入口の最終コマンド名は `pro-review-run --pro/--thinking` を第一候補とする。
+- Path B（Plans.md 6.18、ChatGPT 側 app creation gate 未通過）を「解決する」か「明示凍結して Path A 専念」かをユーザーが決める。新フェーズは全て Path A のみで成立する。
+- ToS / BAN スタンスの文書化は Non-Goal「BAN risk 評価」と衝突するため、書くならユーザーの明示判断（法務 Risk Gate）が先。
+- doctor への selector drift probe（chatgpt.com へ read-only 到達）は doctor の脅威モデルを「純ローカル」から変えるため、opt-in フラグ化を含めてユーザー判断待ち。

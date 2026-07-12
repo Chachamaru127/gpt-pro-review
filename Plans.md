@@ -441,3 +441,59 @@ Issue #1 のうち Phase 8 でスコープ外にした項目を別スライス�
 | 10.1.3 | `~/Downloads` 連打検知で即停止（download flood guard） | cc:完了 |
 | 10.1.4 | live: `copy-ok-1783563428` → `reply via copy button`、Downloads 0 | cc:完了（後に手動コピー疑いと判明） |
 | 10.1.5 | clipboard intercept + click sequence（Oracle）。`copy-intercept-1783563887` で `intercepted=yes` 1回成功 | cc:完了 |
+
+---
+
+## Phase 11-13 Context（2026-07-12 市場調査 + 多視点検証）
+
+依頼: 「Oracle を超えるのは当たり前。Oracle のできないことも GPR でできるように」。
+
+調査: grok -p（Web/X の Oracle 口コミ・競合ランドスケープ）+ Claude WebSearch クロスチェック。要旨は spec の「Market gap research（2026-07-12 追記）」。
+
+**team_validation_mode**: `subagent` — Product+Skeptic / Architecture+Security+QA の 2 fork 並列レビュー実施。主な裁定:
+
+- 11.x の自動 re-open は「session reattach スコープ外」決定と衝突するとの Skeptic 指摘に対し、`docs/oracle-adoptions.md` 次に見る候補と `HANDOFF.md` 次にやることに既出のため、host 検証付きで採用。
+- followup は「同一会話 reattach」を捨て「毎 round 新規会話 + packet 添付」に descope（reattach 非依存、既存 embed 経路の再利用）。
+- quota 強制 / nightly scheduled / ToS 文書化 / チーム共有は Reject または Open Decision 化（spec Non-Goals・Open Decisions 参照）。特に nightly は `headless=False` 固定（`pro-review-browser-drive:1583`）が構造ブロッカー。
+- lint baseline: shellcheck は directive のみで未実行 → 11.3 の CI に組み込む。
+
+**Spec delta**: `docs/spec/00-project-spec.md` に Workflow C（multi-round re-review）、findings 安定 ID / ledger / 診断 artifact / URL host 検証 / consensus ローカル限定の Core Rules、Non-Goals 4 件、Market gap research、Open Decisions 3 件を追記済み（2026-07-12）。
+
+## Phase 11: Oracle parity 堅牢化
+
+| Task | 内容 | DoD | Depends | Status |
+|------|------|-----|---------|--------|
+| 11.1 | nodriver バージョンピン。`pro-review-browser-setup:57` の unpinned install を固定し、doctor にバージョン表示を追加 [tdd:skip:mechanical-pin] | setup が固定版を入れる。doctor が版を表示。`tests/run-all.sh` pass | - | cc:TODO |
+| 11.2 | `SK="$HOME/.claude/skills/..."` ハードコード（browser-embed:71 / run:87 / start:30 / tunnel:8）を env var override 化し、`tests/_assert.sh:104-126` の sed-patch ヘルパーを廃止 | テストが prod と同一コードパスを通る。sed-patch grep 0 件。run-all pass | - | cc:TODO |
+| 11.3 | GitHub Actions CI（**macos runner** 必須: `stat -f`/pbpaste 依存）で run-all.sh + shellcheck + py_compile | push で green。shellcheck 指摘 0（既知 4 件は修正 or 明示 disable） | 11.1, 11.2 | cc:TODO |
+| 11.4 | composer セレクタ 5 点セットの共有定数化（browser-drive 内 11 箇所 → Python 定数 1 つから JS へ派生） | 重複定義 grep 0 件。既存 fixture 回帰 pass | - | cc:TODO |
+| 11.5 | fallback/timeout 時に DOM 抜粋 + screenshot を `reports/<project>/<run_id>/` に保存（`--artifact-dir` 追加、明示 `os.chmod 0o600`。umask 継承に依存しない） | fixture で artifact 生成 + 600 を検証。manual-checklist に live 1 実測 | 11.4 | cc:TODO |
+| 11.6 | 送信成功時に会話 URL を取得し `metadata.json` に保存。保存時に host==chatgpt.com 検証 | fixture で URL 記録と非 chatgpt.com 拒否を検証 | - | cc:TODO |
+| 11.7 | `pro-review-recover` の自動 re-open: 会話タブが閉じていたら metadata の URL（使用時にも host 検証）へ nodriver で遷移して extract | fixture で URL 検証 pass。manual-checklist に live 1 実測 | 11.6 | cc:TODO |
+
+## Phase 12: multi-round review protocol + findings ledger（差別化の本丸）
+
+| Task | 内容 | DoD | Depends | Status |
+|------|------|-----|---------|--------|
+| 12.1 | `--packet-file PATH`（Phase 9.2 積み残しの close）。curated packet を直接投入。secret scan / DONE marker 注入は維持 | fixture で scan/marker 検証。9.2 を cc:完了 に更新 | - | cc:TODO |
+| 12.2 | findings 安定 ID。`pro-review-summarize` が内容ハッシュベースの ID（並び替え・再要約で不変）を `summary.json` に付与 [tdd:required] | 先に「reply 並び替えでも ID 不変」の失敗テストを書き pass させる | - | cc:TODO |
+| 12.3 | findings ledger `~/.pro-review/ledger/<project>.jsonl`（chmod 600、append-only）+ 集計 CLI（round 横断の resolved 率・採用率。proxy 指標である旨を出力に明記） | fixture で追記・集計・600 を検証 | 12.2 | cc:TODO |
+| 12.4 | `pro-review-run --followup <prev_run_id>`: 前回 findings 表 + 修正 diff を packet 化し**新規会話**で送信。回答は finding ID ごとに resolved / still-open / new。`metadata.json` に `previous_run_id` | fixture e2e pass。manual-checklist に live 1 round | 12.1, 12.2, 12.3 | cc:TODO |
+
+## Phase 13: Optional / gated（着手前にユーザー判断）
+
+| Task | 内容 | DoD | Depends | Status |
+|------|------|-----|---------|--------|
+| 13.1 | consensus 比較ユーティリティ: 2 つの findings JSON を突き合わせ agreed / disputed の `consensus.json` を出す。**GPR は他 agent を起動しない**（第二レビュー取得は呼び出し元） | fixture で agree/dispute/片側欠落を検証 | 12.2 | cc:TODO |
+| 13.2 | doctor `--selector-check`（opt-in）: chatgpt.com へ read-only 到達しセレクタ一致状況を報告。既定 OFF | opt-in でのみ動作。manual-checklist 形式で記録 | 11.4, spec Open Decision の承認 | cc:TODO |
+| 13.3 | 実行回数の観測カウンタ（表示のみ、強制なし）を doctor / ledger 集計に追加 | fixture で計数検証。cap/pacing は実装しない | 12.3 | cc:TODO |
+
+## Phase 11-13 Reject 記録（2026-07-12）
+
+| 却下項目 | 理由 |
+|---|---|
+| nightly scheduled review（launchd/cron） | `headless=False` 固定で GUI Chrome 必須・ログイン失効時に無人全滅・夜間に判断する消費者（Claude セッション）不在。spec Non-Goals に追記済み |
+| `pro-review-share`（Slack / PR コメント） | 単一ユーザー設計と衝突。初の非 OpenAI 宛外部送信面。spec Non-Goals に追記済み |
+| quota cap / pacing 強制 | Non-Goal「BAN risk 評価」と衝突。実害記録ゼロで過剰設計。観測カウンタ（13.3）に縮小 |
+| ToS / BAN スタンス文書化 | 法務 Risk Gate。ユーザー明示判断が先（spec Open Decisions） |
+| API engine / multi-model browser panel / 汎用 write / CI live browser | 既存 Non-Goals・oracle-adoptions の不採用判断を維持 |
