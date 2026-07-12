@@ -18,6 +18,7 @@ TESTS=(
   "test-full-gate.sh"
   "test-persistence-redaction.sh"
   "test-summarize.sh"
+  "test-summarize-stable-id.sh"
   "test-report-bundle.sh"
   "test-doctor.sh"
   "test-tunnel-check.sh"

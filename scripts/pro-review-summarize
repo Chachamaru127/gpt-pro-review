@@ -6,6 +6,7 @@ Output:
 - optional Markdown summary via --markdown-out
 """
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -54,6 +55,31 @@ def classify(severity, title, recommendation):
     if normalize_severity(severity) in ("高", "中"):
         return "対応"
     return "見送り"
+
+
+def normalize_text(value):
+    return " ".join(value.lower().split())
+
+
+def stable_id_base(finding):
+    parts = [
+        finding["severity"],
+        finding["file"].lower(),
+        str(finding["line"]),
+        normalize_text(finding["title"]),
+        normalize_text(finding.get("recommendation", "")),
+    ]
+    digest = hashlib.sha256("\x1e".join(parts).encode("utf-8")).hexdigest()[:12]
+    return f"f-{digest}"
+
+
+def assign_finding_ids(findings):
+    seen = {}
+    for finding in findings:
+        base = stable_id_base(finding)
+        count = seen.get(base, 0) + 1
+        seen[base] = count
+        finding["id"] = base if count == 1 else f"{base}-{count}"
 
 
 def parse_reply(text):
@@ -275,6 +301,7 @@ def main():
     with open(args.reply_path, "rb") as f:
         text = f.read().decode("utf-8", errors="replace")
     findings = parse_reply(text)
+    assign_finding_ids(findings)
     counts = {}
     for finding in findings:
         counts[finding["decision"]] = counts.get(finding["decision"], 0) + 1
