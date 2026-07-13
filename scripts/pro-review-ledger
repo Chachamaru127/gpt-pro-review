@@ -1,0 +1,199 @@
+#!/usr/bin/env python3
+"""Append-only findings ledger and cross-round stats for pro-review."""
+import argparse
+import json
+import os
+import re
+import sys
+from collections import Counter, defaultdict
+from datetime import datetime, timezone
+
+BASE = os.path.join(os.environ.get("HOME", os.path.expanduser("~")), ".pro-review")
+LEDGER_DIR = os.path.join(BASE, "ledger")
+PROJECT_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+RUN_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+PROXY_NOTE = (
+    "注: 以下の採用率・再出現率は Claude/ユーザーの受容の proxy 指標であり、"
+    "客観的な正誤率ではありません。"
+)
+
+
+def die(msg, code=2):
+    sys.stderr.write(f"[pro-review-ledger] error: {msg}\n")
+    sys.exit(code)
+
+
+def validate_project(project):
+    if not PROJECT_RE.match(project) or project in (".", ".."):
+        die(f"invalid project name: {project!r}")
+
+
+def validate_run_id(run_id):
+    if not RUN_ID_RE.match(run_id) or run_id in (".", ".."):
+        die(f"invalid run_id: {run_id!r}")
+    if run_id.startswith(("-", ".")):
+        die(f"invalid run_id: {run_id!r}")
+
+
+def ensure_private_dir(path, mode):
+    os.makedirs(path, exist_ok=True)
+    os.chmod(path, mode)
+
+
+def ledger_path(project):
+    return os.path.join(LEDGER_DIR, f"{project}.jsonl")
+
+
+def infer_run_id(summary_path, summary):
+    reply_path = summary.get("reply_path") or ""
+    for part in (summary_path, reply_path):
+        base = os.path.basename(part)
+        if base.startswith("REPLY-") and base.endswith(".md"):
+            return base[len("REPLY-") : -len(".md")]
+        parent = os.path.basename(os.path.dirname(part))
+        if parent and parent not in (".", "..", "reports", "inbox"):
+            return parent
+    return None
+
+
+def load_summary(path):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except OSError as exc:
+        die(f"cannot read summary: {path}: {exc}")
+    except json.JSONDecodeError as exc:
+        die(f"invalid JSON in summary: {path}: {exc}")
+    if not isinstance(data, dict):
+        die(f"summary root must be an object: {path}")
+    findings = data.get("findings")
+    if not isinstance(findings, list):
+        die(f"summary missing findings list: {path}")
+    return data
+
+
+def append_entries(project, summary_path, run_id):
+    validate_project(project)
+    validate_run_id(run_id)
+    summary = load_summary(summary_path)
+    ensure_private_dir(BASE, 0o700)
+    ensure_private_dir(LEDGER_DIR, 0o700)
+    path = ledger_path(project)
+    if os.path.exists(path):
+        if not os.path.isfile(path):
+            die(f"ledger path is not a regular file: {path}")
+        if os.path.islink(path):
+            die(f"ledger path must not be a symlink: {path}")
+    else:
+        open(path, "a", encoding="utf-8").close()
+        os.chmod(path, 0o600)
+    recorded_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    with open(path, "a", encoding="utf-8") as f:
+        for finding in summary["findings"]:
+            if not isinstance(finding, dict):
+                die(f"finding must be an object in {summary_path}")
+            finding_id = finding.get("id")
+            if not finding_id:
+                die(f"finding missing id in {summary_path}")
+            row = {
+                "project": project,
+                "run_id": run_id,
+                "recorded_at": recorded_at,
+                "finding_id": finding_id,
+                "severity": finding.get("severity", ""),
+                "decision": finding.get("decision", ""),
+                "file": finding.get("file", ""),
+                "line": finding.get("line", 0),
+                "title": finding.get("title", ""),
+                "recommendation": finding.get("recommendation", ""),
+            }
+            f.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
+    os.chmod(path, 0o600)
+    print(f"appended: {len(summary['findings'])} findings to {path}")
+
+
+def load_rows(project):
+    validate_project(project)
+    path = ledger_path(project)
+    if not os.path.isfile(path):
+        die(f"ledger not found: {path}")
+    rows = []
+    with open(path, "r", encoding="utf-8") as f:
+        for lineno, line in enumerate(f, 1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError as exc:
+                die(f"invalid JSONL at {path}:{lineno}: {exc}")
+            if not isinstance(row, dict):
+                die(f"ledger row must be an object at {path}:{lineno}")
+            rows.append(row)
+    return rows
+
+
+def pct(count, total):
+    if total == 0:
+        return 0.0
+    return (count / total) * 100.0
+
+
+def print_stats(project):
+    rows = load_rows(project)
+    run_ids = {row.get("run_id", "") for row in rows}
+    run_ids.discard("")
+    id_runs = defaultdict(set)
+    decisions = Counter()
+    for row in rows:
+        fid = row.get("finding_id", "")
+        rid = row.get("run_id", "")
+        if fid and rid:
+            id_runs[fid].add(rid)
+        decision = row.get("decision", "") or "(empty)"
+        decisions[decision] += 1
+    recurring = sum(1 for runs in id_runs.values() if len(runs) >= 2)
+    total = len(rows)
+    print(f"project: {project}")
+    print(f"total_findings: {total}")
+    print(f"rounds: {len(run_ids)}")
+    print(f"recurring_ids: {recurring}")
+    print("decision_distribution:")
+    for key in ("対応", "見送り", "要確認"):
+        count = decisions.get(key, 0)
+        print(f"  {key}: {count} ({pct(count, total):.1f}%)")
+    for key, count in sorted(decisions.items()):
+        if key in ("対応", "見送り", "要確認"):
+            continue
+        print(f"  {key}: {count} ({pct(count, total):.1f}%)")
+    print(PROXY_NOTE)
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Findings ledger for pro-review.")
+    sub = ap.add_subparsers(dest="command", required=True)
+
+    ap_append = sub.add_parser("append", help="append findings from summary.json")
+    ap_append.add_argument("project")
+    ap_append.add_argument("summary_path")
+    ap_append.add_argument("--run-id")
+
+    ap_stats = sub.add_parser("stats", help="show cross-round ledger stats")
+    ap_stats.add_argument("project")
+
+    args = ap.parse_args()
+    if args.command == "append":
+        summary = load_summary(args.summary_path)
+        run_id = args.run_id or infer_run_id(args.summary_path, summary)
+        if not run_id:
+            die("run_id required (use --run-id or a summary path under reports/<project>/<run_id>/)")
+        append_entries(args.project, args.summary_path, run_id)
+        return 0
+    if args.command == "stats":
+        print_stats(args.project)
+        return 0
+    die(f"unknown command: {args.command}")
+
+
+if __name__ == "__main__":
+    sys.exit(main())

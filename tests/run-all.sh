@@ -19,6 +19,7 @@ TESTS=(
   "test-persistence-redaction.sh"
   "test-summarize.sh"
   "test-summarize-stable-id.sh"
+  "test-ledger.sh"
   "test-report-bundle.sh"
   "test-doctor.sh"
   "test-tunnel-check.sh"
