@@ -88,7 +88,7 @@ cleanup_paths "$REPO" "$HOME/.pro-review/inbox/$PROJECT" "$HOME/.pro-review/inbo
 P="rid-sr-$$"
 GOOD="1700000000123-deadbe"
 mkdir -p "$HOME/.pro-review/inbox/$P"
-OUT=$("$SR" "$P" "$GOOD" --text "ok [[DONE-$GOOD]]")
+OUT=$("$SR" "$P" "$GOOD" --text "ok [[DONE-$GOOD]]" < /dev/null)  # CI は stdin が空 FIFO のため明示 close
 assert_exit_ok "$?" "T4 hyphenated run_id"
 assert_file_exists "$HOME/.pro-review/inbox/$P/REPLY-$GOOD.md" "T4 reply file"
 cleanup_paths "$HOME/.pro-review/inbox/$P"
@@ -97,13 +97,13 @@ cleanup_paths "$HOME/.pro-review/inbox/$P"
 P2="rid-sr2-$$"
 NUM=1700000042
 mkdir -p "$HOME/.pro-review/inbox/$P2"
-"$SR" "$P2" "$NUM" --text "legacy [[DONE-$NUM]]" >/dev/null
+"$SR" "$P2" "$NUM" --text "legacy [[DONE-$NUM]]" >/dev/null < /dev/null
 assert_file_exists "$HOME/.pro-review/inbox/$P2/REPLY-$NUM.md" "T4 legacy numeric"
 cleanup_paths "$HOME/.pro-review/inbox/$P2"
 
 for bad in "../x" "" "has space" "a/b" ".." ".foo" "-foo"; do
   set +e
-  "$SR" "rid-bad-$$" "$bad" --text "x" >/dev/null 2>&1
+  "$SR" "rid-bad-$$" "$bad" --text "x" >/dev/null 2>&1 < /dev/null
   RC=$?
   set -e
   assert_exit_nonzero "$RC" "T4 reject run_id '$bad'"
@@ -169,8 +169,8 @@ mkdir -p "$INBOX"
 RA="1700000000123-aaa111"
 RB="1700000000123-bbb222"
 SINCE=1700000099
-"$SR" "$P" "$RA" --text "$(printf 'reply A\n[[DONE-%s]]' "$RA")" >/dev/null
-"$SR" "$P" "$RB" --text "$(printf 'reply B\n[[DONE-%s]]' "$RB")" >/dev/null
+"$SR" "$P" "$RA" --text "$(printf 'reply A\n[[DONE-%s]]' "$RA")" >/dev/null < /dev/null
+"$SR" "$P" "$RB" --text "$(printf 'reply B\n[[DONE-%s]]' "$RB")" >/dev/null < /dev/null
 touch "$INBOX/REPLY-$RB.md"
 [ "$(stat -f '%m' "$INBOX/REPLY-$RB.md")" -ge "$(stat -f '%m' "$INBOX/REPLY-$RA.md")" ] \
   || _fail "T7 setup: REPLY-B must be newer than REPLY-A"

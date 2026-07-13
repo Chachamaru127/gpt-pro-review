@@ -38,7 +38,7 @@ P="prr-t2-$$"
 SINCE=$((TS_BASE + 2))
 INBOX_DIR="$HOME/.pro-review/inbox/$P"
 mkdir -p "$INBOX_DIR"
-OUT=$("$CMD" "$P" "$SINCE" --text "hello [[DONE-$SINCE]]")
+OUT=$("$CMD" "$P" "$SINCE" --text "hello [[DONE-$SINCE]]" < /dev/null)  # CI は stdin が空 FIFO のため明示 close
 assert_exit_ok "$?" "T2 exit 0"
 assert_file_exists "$INBOX_DIR/REPLY-$SINCE.md" "T2 reply file"
 cleanup_paths "$INBOX_DIR"
@@ -107,7 +107,7 @@ assert_exit_nonzero "$RC" "T5 run_id 'a/b' 拒否"
 # path-safe 非数値 id（新 run_id 形式の簡易例）は受理
 P5="prr-t5b-$$"
 mkdir -p "$HOME/.pro-review/inbox/$P5"
-"$CMD" "$P5" "legacy-alpha" --text "ok" >/dev/null
+"$CMD" "$P5" "legacy-alpha" --text "ok" >/dev/null < /dev/null
 assert_file_exists "$HOME/.pro-review/inbox/$P5/REPLY-legacy-alpha.md" "T5 path-safe non-numeric run_id"
 cleanup_paths "$HOME/.pro-review/inbox/$P5"
 
