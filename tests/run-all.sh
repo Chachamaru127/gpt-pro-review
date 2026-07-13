@@ -39,6 +39,7 @@ TESTS=(
   "test-denylist.sh"
   "test-danger-mode.sh"
   "test-recover.sh"
+  "test-recover-reopen.sh"
   "test-omission-warn.sh"
   "test-packet-file.sh"
   "test-followup.sh"

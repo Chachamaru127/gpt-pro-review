@@ -350,6 +350,28 @@ def load_persisted_conversation_url(run_id):
     return validate_conversation_url(raw)
 
 
+def resolve_reopen_conversation_url(run_id):
+    """Return validated staging URL for extract-only re-open, or None."""
+    path = conversation_url_outbox_path(run_id)
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
+            raw = f.read().strip()
+    except OSError:
+        return None
+    if not raw:
+        return None
+    validated = validate_conversation_url(raw)
+    if validated is None:
+        sys.stderr.write(
+            "[pro-review-browser-drive] conversation url rejected for reopen"
+            f" (host must be {CHATGPT_CONVERSATION_HOST}): {raw}\n"
+        )
+        return None
+    return validated
+
+
 def connector_unavailable(label, detail=""):
     print("STOP_REASON=connector_unavailable")
     print(f"NEXT_ACTION=ChatGPT側で{label}をこのチャットで有効化")
@@ -1801,6 +1823,20 @@ async def drive_live(args):
             reply, reason, state = await extract_live_reply(
                 page, args.run_id, args.timeout, request_file=args.request_file
             )
+            if reply is None:
+                reopen_url = resolve_reopen_conversation_url(args.run_id)
+                if reopen_url:
+                    reopen_url = validate_conversation_url(reopen_url)
+                    if reopen_url:
+                        sys.stderr.write(
+                            f"[pro-review-browser-drive] reopening conversation: {reopen_url}\n"
+                        )
+                        page = await browser.get(reopen_url)
+                        _ARTIFACT_RUNTIME["page"] = page
+                        await page.sleep(2)
+                        reply, reason, state = await extract_live_reply(
+                            page, args.run_id, args.timeout, request_file=args.request_file
+                        )
             if reply is None:
                 return await afallback(reason, state)
             print(reply)
