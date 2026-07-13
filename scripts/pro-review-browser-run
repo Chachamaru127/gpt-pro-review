@@ -92,7 +92,10 @@ EMBED_OUT=$("$SK/pro-review-browser-embed" "${EMBED_ARGS[@]}")
 [ -n "$PROJECT" ] && [ -n "$SINCE" ] && [ -n "$RUN_ID" ] && [ -n "$INBOX" ] && [ -n "$REQ" ] && [ -n "$DEEP_RESEARCH" ] \
   || { echo "[error] browser-embed output missing machine-readable fields" >&2; exit 1; }
 
-DRIVE_ARGS=(--run-id "$RUN_ID" --request-file "$REQ" --timeout "$TIMEOUT" --deep-research "$DEEP_RESEARCH")
+BASE="$HOME/.pro-review"
+ARTIFACT_DIR="$BASE/reports/$PROJECT/$RUN_ID"
+
+DRIVE_ARGS=(--run-id "$RUN_ID" --request-file "$REQ" --timeout "$TIMEOUT" --deep-research "$DEEP_RESEARCH" --artifact-dir "$ARTIFACT_DIR")
 if [ -n "$FIXTURE_HTML" ]; then
   if grep -q '__RUN_ID__' "$FIXTURE_HTML" 2>/dev/null; then
     FIXTURE_RENDERED=$(mktemp -t prr-browser-fixture-XXXXXX.html)

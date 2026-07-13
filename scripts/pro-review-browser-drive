@@ -75,6 +75,15 @@ CONNECTOR_MENU_SELECTORS = [
     'button[aria-label*="Plugins"]',
 ]
 
+DOM_EXCERPT_MAX_BYTES = 512 * 1024
+
+_ARTIFACT_RUNTIME = {
+    "artifact_dir": None,
+    "fixture_html_path": None,
+    "fixture_html_cache": None,
+    "page": None,
+}
+
 DEEP_RESEARCH_NEED_PATTERNS = [
     ("explicit-deep-research", re.compile(r"\bdeep\s*research\b|deepresearch|ディープリサーチ", re.I)),
     ("multi-source", re.compile(r"複数ソース|横断|multi[- ]?source", re.I)),
@@ -159,7 +168,106 @@ def state_from_parser(parser):
     }
 
 
-def fallback(reason, state=None):
+def configure_artifact_runtime(args):
+    _ARTIFACT_RUNTIME["artifact_dir"] = args.artifact_dir or None
+    _ARTIFACT_RUNTIME["fixture_html_path"] = args.fixture_html
+    _ARTIFACT_RUNTIME["fixture_html_cache"] = None
+    _ARTIFACT_RUNTIME["page"] = None
+
+
+def _clip_dom_excerpt(html):
+    if not html:
+        return ""
+    raw = html.encode("utf-8", errors="replace")
+    if len(raw) <= DOM_EXCERPT_MAX_BYTES:
+        return html
+    return raw[:DOM_EXCERPT_MAX_BYTES].decode("utf-8", errors="replace")
+
+
+def _read_fixture_html():
+    cached = _ARTIFACT_RUNTIME.get("fixture_html_cache")
+    if cached is not None:
+        return cached
+    path = _ARTIFACT_RUNTIME.get("fixture_html_path")
+    if not path or not os.path.isfile(path):
+        return None
+    try:
+        with open(path, "rb") as f:
+            return f.read().decode("utf-8", errors="replace")
+    except OSError:
+        return None
+
+
+def _prepare_artifact_dir(artifact_dir):
+    os.makedirs(artifact_dir, exist_ok=True)
+    os.chmod(artifact_dir, 0o700)
+
+
+def _write_dom_excerpt(artifact_dir, html):
+    if not html:
+        return
+    path = os.path.join(artifact_dir, "dom-excerpt.html")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(_clip_dom_excerpt(html))
+    os.chmod(path, 0o600)
+
+
+async def _save_screenshot_best_effort(page, artifact_dir):
+    path = os.path.join(artifact_dir, "screenshot.png")
+    try:
+        if hasattr(page, "save_screenshot"):
+            await page.save_screenshot(path)
+        elif hasattr(page, "screenshot"):
+            data = await page.screenshot()
+            if data:
+                with open(path, "wb") as f:
+                    f.write(data)
+            else:
+                return
+        else:
+            return
+        os.chmod(path, 0o600)
+    except Exception as exc:
+        sys.stderr.write(
+            f"[pro-review-browser-drive] warning: screenshot save failed: {exc}\n"
+        )
+
+
+def _emit_artifacts_line(artifact_dir):
+    print(f"ARTIFACTS:{artifact_dir}")
+
+
+def save_diagnostic_artifacts_sync():
+    artifact_dir = _ARTIFACT_RUNTIME.get("artifact_dir")
+    if not artifact_dir:
+        return
+    _prepare_artifact_dir(artifact_dir)
+    html = _read_fixture_html()
+    _write_dom_excerpt(artifact_dir, html)
+    _emit_artifacts_line(artifact_dir)
+
+
+async def save_diagnostic_artifacts_async():
+    artifact_dir = _ARTIFACT_RUNTIME.get("artifact_dir")
+    if not artifact_dir:
+        return
+    _prepare_artifact_dir(artifact_dir)
+    html = None
+    page = _ARTIFACT_RUNTIME.get("page")
+    if page is not None:
+        try:
+            html = await page.get_content()
+        except Exception:
+            html = None
+    if html is None:
+        html = _read_fixture_html()
+    _write_dom_excerpt(artifact_dir, html)
+    if page is not None:
+        await _save_screenshot_best_effort(page, artifact_dir)
+    _emit_artifacts_line(artifact_dir)
+
+
+def _emit_fallback(reason, state=None):
     if state:
         print(
             "BROWSER_STATE:"
@@ -168,6 +276,16 @@ def fallback(reason, state=None):
         print(f"BROWSER_STATE_SUMMARY:{summarize_browser_state(state)}")
     print(f"FALLBACK:{reason}")
     return 3
+
+
+def fallback(reason, state=None):
+    save_diagnostic_artifacts_sync()
+    return _emit_fallback(reason, state)
+
+
+async def afallback(reason, state=None):
+    await save_diagnostic_artifacts_async()
+    return _emit_fallback(reason, state)
 
 
 def validate_conversation_url(url):
@@ -303,6 +421,7 @@ def decide_deep_research_selection(policy, request_text):
 def extract_from_html(path, run_id):
     with open(path, "rb") as f:
         raw = f.read().decode("utf-8", errors="replace")
+    _ARTIFACT_RUNTIME["fixture_html_cache"] = raw
     parser = AssistantParser()
     parser.feed(raw)
     state = state_from_parser(parser)
@@ -324,6 +443,7 @@ def extract_from_html(path, run_id):
 def fixture_connector_send(path, label):
     with open(path, "rb") as f:
         raw = f.read().decode("utf-8", errors="replace")
+    _ARTIFACT_RUNTIME["fixture_html_cache"] = raw
     parser = AssistantParser()
     parser.feed(raw)
     if parser.login_required:
@@ -1645,7 +1765,7 @@ def classify_live_error(exc):
 async def drive_live(args):
     paths = live_paths()
     if not os.path.exists(paths["login_marker"]):
-        return fallback("login required")
+        return await afallback("login required")
     request_text = ""
     if not args.extract_only:
         # 送信モードのみ request が必要。extract-only(recover) は不要。
@@ -1659,12 +1779,12 @@ async def drive_live(args):
             sys.stderr.write(f"[pro-review-browser-drive] cannot read request file: {exc}\n")
             return 2
     if not ensure_live_python():
-        return fallback("nodriver unavailable")
+        return await afallback("nodriver unavailable")
     import nodriver
 
     chrome = find_chrome()
     if not chrome:
-        return fallback("chrome unavailable")
+        return await afallback("chrome unavailable")
     browser = None
     try:
         browser = await nodriver.start(
@@ -1674,6 +1794,7 @@ async def drive_live(args):
             browser_args=["--disable-notifications"],
         )
         page = await browser.get("https://chatgpt.com/")
+        _ARTIFACT_RUNTIME["page"] = page
         await page.sleep(2)
         if args.extract_only:
             # recover 用: 送信せず、開いている会話の最終回答だけ取得する。
@@ -1681,7 +1802,7 @@ async def drive_live(args):
                 page, args.run_id, args.timeout, request_file=args.request_file
             )
             if reply is None:
-                return fallback(reason, state)
+                return await afallback(reason, state)
             print(reply)
             return 0
         selector, editor = await wait_for_chat_input(page, min(args.timeout, 30))
@@ -1691,8 +1812,8 @@ async def drive_live(args):
             parser.feed(content)
             state = state_from_parser(parser)
             if parser.login_required:
-                return fallback("login required", state)
-            return fallback("composer not found", state)
+                return await afallback("login required", state)
+            return await afallback("composer not found", state)
         if args.mode == "connector":
             selected, detail = await select_connector_mode(
                 page, args.connector_label, min(args.timeout, 30)
@@ -1709,7 +1830,7 @@ async def drive_live(args):
             )
             selector, editor = await wait_for_chat_input(page, min(args.timeout, 30))
             if not editor:
-                return fallback("composer not found after connector selection")
+                return await afallback("composer not found after connector selection")
         else:
             policy = args.deep_research
             if policy == "auto":
@@ -1722,14 +1843,14 @@ async def drive_live(args):
                         "[pro-review-browser-drive] deep research selection failed: "
                         f"{decision_reason}; {detail}\n"
                     )
-                    return fallback("deep research unavailable")
+                    return await afallback("deep research unavailable")
                 sys.stderr.write(
                     "[pro-review-browser-drive] deep research selected: "
                     f"{decision_reason}; {detail}\n"
                 )
                 selector, editor = await wait_for_chat_input(page, min(args.timeout, 30))
                 if not editor:
-                    return fallback("composer not found after deep research selection")
+                    return await afallback("composer not found after deep research selection")
         # 8.2: packet はファイル添付を主経路にする。98KB を入力欄に直書きしない。
         # 添付できたら入力欄には短い指示文だけ入れる。添付不可なら直書きにフォールバック。
         attached = False
@@ -1771,19 +1892,19 @@ async def drive_live(args):
                         await editor.click()
                         await editor.send_keys(request_text)
                     else:
-                        return fallback("prompt injection failed (request too large to type)")
+                        return await afallback("prompt injection failed (request too large to type)")
         ready, ready_reason = await wait_send_enabled(page, min(args.timeout, 60))
         if not ready:
             state = await read_browser_state(page)
             sys.stderr.write(
                 f"[pro-review-browser-drive] send not ready: {ready_reason}\n"
             )
-            return fallback(f"send not ready: {ready_reason}", state)
+            return await afallback(f"send not ready: {ready_reason}", state)
         sent_ok, sent_reason = await click_send(page, 20)
         if not sent_ok:
             state = await read_browser_state(page)
             sys.stderr.write(f"[pro-review-browser-drive] send not confirmed: {sent_reason}\n")
-            return fallback(f"send not confirmed: {sent_reason}", state)
+            return await afallback(f"send not confirmed: {sent_reason}", state)
         page_url = await current_page_url(page)
         if persist_conversation_url(args.run_id, page_url):
             sys.stderr.write(f"[pro-review-browser-drive] conversation url saved: {page_url}\n")
@@ -1796,12 +1917,12 @@ async def drive_live(args):
             page, args.run_id, args.timeout, request_file=args.request_file
         )
         if reply is None:
-            return fallback(reason, state)
+            return await afallback(reason, state)
         print(reply)
         return 0
     except Exception as exc:
         sys.stderr.write(f"[pro-review-browser-drive] live error: {exc}\n")
-        return fallback(classify_live_error(exc))
+        return await afallback(classify_live_error(exc))
     finally:
         if browser is not None:
             try:
@@ -1830,7 +1951,11 @@ def main():
                     help="ファイル添付を使わず入力欄に直書きする (フォールバック経路)")
     ap.add_argument("--fixture-reply",
                     help="copy 取得をモックした reply 本文ファイル (fixture)")
+    ap.add_argument("--artifact-dir",
+                    help="save diagnostic artifacts (dom-excerpt.html, screenshot.png) on fallback/timeout")
     args = ap.parse_args()
+
+    configure_artifact_runtime(args)
 
     if args.fixture_reply:
         return extract_from_reply_file(args.fixture_reply, args.run_id)

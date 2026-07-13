@@ -11,6 +11,7 @@ TESTS=(
   "test-browser-embed.sh"
   "test-browser-setup.sh"
   "test-browser-drive.sh"
+  "test-artifact-dir.sh"
   "test-browser-run.sh"
   "test-connector-run.sh"
   "test-search-fetch.sh"
