@@ -21,6 +21,7 @@ mkdir -p "$REPORTS"
 chmod 700 "$REPORTS" 2>/dev/null || true
 VALIDATOR="$(cd "$(dirname "$0")" && pwd -P)/pro-review-validate-reply"
 SUMMARIZER="$(cd "$(dirname "$0")" && pwd -P)/pro-review-summarize"
+DRIVE="$(cd "$(dirname "$0")" && pwd -P)/pro-review-browser-drive"
 
 # 露出を閉じる（成功/失敗どちらでも必ず実行）
 close_access() {
@@ -82,12 +83,17 @@ if [ -n "$REPLY" ] && "$VALIDATOR" "$INBOX" "$REPLY" --quiet 2>/dev/null; then
     [ -f "$SUMMARY_JSON" ] && echo "summary_json: $SUMMARY_JSON"
     [ -f "$SUMMARY_MD" ] && echo "summary_markdown: $SUMMARY_MD"
   fi
-  python3 - "$BUNDLE/metadata.json" "$PROJECT" "$RUN_ID" "$REPLY_BASE" "$REQUEST_FOUND" "$(basename "$DEST")" <<'PY'
+  python3 - "$BUNDLE/metadata.json" "$PROJECT" "$RUN_ID" "$REPLY_BASE" "$REQUEST_FOUND" "$(basename "$DEST")" "$DRIVE" <<'PY'
+import importlib.machinery
 import json, os, sys, time
-path, project, run_id, reply_file, request_found, legacy_report_file = sys.argv[1:]
+path, project, run_id, reply_file, request_found, legacy_report_file, drive_script = sys.argv[1:]
 since = os.environ.get("PRO_REVIEW_REPORT_SINCE")
 if not since and "-" in run_id:
     since = run_id.split("-", 1)[0]
+conversation_url = None
+if os.path.isfile(drive_script):
+    mod = importlib.machinery.SourceFileLoader("prr_browser_drive_meta", drive_script).load_module()
+    conversation_url = mod.load_persisted_conversation_url(run_id)
 data = {
     "mode": os.environ.get("PRO_REVIEW_REPORT_MODE", "unknown"),
     "project": project,
@@ -99,6 +105,7 @@ data = {
     "legacy_report_file": legacy_report_file,
     "reply_file": reply_file,
     "request_found": request_found == "true",
+    "conversation_url": conversation_url,
     "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
 }
 with open(path, "w", encoding="utf-8") as f:

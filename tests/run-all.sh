@@ -21,6 +21,7 @@ TESTS=(
   "test-summarize-stable-id.sh"
   "test-ledger.sh"
   "test-report-bundle.sh"
+  "test-conversation-url.sh"
   "test-doctor.sh"
   "test-tunnel-check.sh"
   "test-run-entry.sh"

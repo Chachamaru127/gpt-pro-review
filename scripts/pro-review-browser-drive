@@ -18,6 +18,9 @@ import sys
 import time
 from collections.abc import Mapping
 from html.parser import HTMLParser
+from urllib.parse import urlparse
+
+CHATGPT_CONVERSATION_HOST = "chatgpt.com"
 
 TOOL_POLICY_CHOICES = ("auto", "on", "off")
 BROWSER_MODE_CHOICES = ("direct", "connector")
@@ -165,6 +168,68 @@ def fallback(reason, state=None):
         print(f"BROWSER_STATE_SUMMARY:{summarize_browser_state(state)}")
     print(f"FALLBACK:{reason}")
     return 3
+
+
+def validate_conversation_url(url):
+    """Return url when host is exactly chatgpt.com over https; else None."""
+    if not url or not isinstance(url, str):
+        return None
+    candidate = url.strip()
+    if not candidate:
+        return None
+    try:
+        parsed = urlparse(candidate)
+    except ValueError:
+        return None
+    if parsed.scheme != "https":
+        return None
+    host = (parsed.hostname or "").lower()
+    if host != CHATGPT_CONVERSATION_HOST:
+        return None
+    return candidate
+
+
+def conversation_url_outbox_path(run_id):
+    return os.path.join(
+        os.path.expanduser("~/.pro-review/outbox"),
+        f"conversation-url-{run_id}",
+    )
+
+
+def persist_conversation_url(run_id, url):
+    """Validate and stage conversation URL for finish. Returns validated url or None."""
+    validated = validate_conversation_url(url)
+    if validated is None:
+        if url and str(url).strip():
+            sys.stderr.write(
+                "[pro-review-browser-drive] conversation url rejected"
+                f" (host must be {CHATGPT_CONVERSATION_HOST}): {url}\n"
+            )
+        return None
+    path = conversation_url_outbox_path(run_id)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(validated)
+        f.write("\n")
+    os.chmod(path, 0o600)
+    try:
+        os.chmod(os.path.dirname(path), 0o700)
+    except OSError:
+        pass
+    return validated
+
+
+def load_persisted_conversation_url(run_id):
+    """Load staged conversation URL and re-validate host before use."""
+    path = conversation_url_outbox_path(run_id)
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
+            raw = f.read().strip()
+    except OSError:
+        return None
+    return validate_conversation_url(raw)
 
 
 def connector_unavailable(label, detail=""):
@@ -317,6 +382,11 @@ def ensure_live_python():
 
 async def js(page, expression):
     return await page.evaluate(expression, await_promise=True, return_by_value=True)
+
+
+async def current_page_url(page):
+    href = await js(page, "window.location.href")
+    return str(href).strip() if href else ""
 
 
 def js_object(result):
@@ -1714,6 +1784,9 @@ async def drive_live(args):
             state = await read_browser_state(page)
             sys.stderr.write(f"[pro-review-browser-drive] send not confirmed: {sent_reason}\n")
             return fallback(f"send not confirmed: {sent_reason}", state)
+        page_url = await current_page_url(page)
+        if persist_conversation_url(args.run_id, page_url):
+            sys.stderr.write(f"[pro-review-browser-drive] conversation url saved: {page_url}\n")
         if args.send_only:
             print("sent: connector" if args.mode == "connector" else "sent: direct")
             if args.mode == "connector":
