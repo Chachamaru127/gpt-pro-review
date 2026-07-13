@@ -23,6 +23,55 @@ TOOL_POLICY_CHOICES = ("auto", "on", "off")
 BROWSER_MODE_CHOICES = ("direct", "connector")
 DEFAULT_CONNECTOR_LABEL = "pro-review Tunnel connector"
 
+COMPOSER_QUERY_SELECTORS = [
+    "#prompt-textarea",
+    "textarea",
+    "div[contenteditable='true']",
+    "[data-testid='composer-text-input']",
+    ".ProseMirror",
+]
+COMPOSER_MATCH_SELECTOR = (
+    "textarea,input,#prompt-textarea,.ProseMirror,"
+    '[role="textbox"],[contenteditable="true"]'
+)
+COMPOSER_QUERY_SELECTOR_CSV = ", ".join(COMPOSER_QUERY_SELECTORS)
+
+BUTTON_ROLE_SELECTOR = 'button,[role="button"]'
+MENU_SCAN_DEEP_RESEARCH = (
+    "button,[role=\"button\"],[role=\"menuitem\"],[role=\"option\"],"
+    "[cmdk-item],a,[data-testid],[aria-label],span,div"
+)
+MENU_TARGET_DEEP_RESEARCH = (
+    "button,[role=\"button\"],[role=\"menuitem\"],[role=\"option\"],"
+    "[cmdk-item],a,[data-testid]"
+)
+MENU_SCAN_CONNECTOR_SELECTED = (
+    "button,[role=\"button\"],[role=\"menuitem\"],[role=\"menuitemcheckbox\"],"
+    "[role=\"option\"],[data-testid],[aria-label],span,div"
+)
+MENU_SCAN_CONNECTOR_CANDIDATE = (
+    "button,[role=\"button\"],[role=\"menuitem\"],[role=\"menuitemcheckbox\"],"
+    "[role=\"option\"],[cmdk-item],a,[data-testid],[aria-label],span,div"
+)
+MENU_TARGET_CONNECTOR = (
+    "button,[role=\"button\"],[role=\"menuitem\"],[role=\"menuitemcheckbox\"],"
+    "[role=\"option\"],[cmdk-item],a,[data-testid]"
+)
+SELECTED_STATE_CLOSEST = (
+    '[aria-checked],[aria-selected],[aria-pressed],[data-state],'
+    '[role="menuitemcheckbox"],[role="option"]'
+)
+CONNECTOR_MENU_SELECTORS = [
+    "#composer-plus-btn",
+    '[data-testid="composer-plus-btn"]',
+    'button[aria-label="Tools"]',
+    'button[aria-label*="Tools"]',
+    'button[aria-label*="ツール"]',
+    'button[aria-label*="コネクタ"]',
+    'button[aria-label*="Connectors"]',
+    'button[aria-label*="Plugins"]',
+]
+
 DEEP_RESEARCH_NEED_PATTERNS = [
     ("explicit-deep-research", re.compile(r"\bdeep\s*research\b|deepresearch|ディープリサーチ", re.I)),
     ("multi-source", re.compile(r"複数ソース|横断|multi[- ]?source", re.I)),
@@ -303,52 +352,46 @@ def js_object(result):
 
 
 async def clear_prompt(page):
-    script = """
-(() => {
-  const selectors = [
-    '#prompt-textarea',
-    'textarea',
-    "div[contenteditable='true']",
-    "[data-testid='composer-text-input']",
-    '.ProseMirror'
-  ];
+    script = f"""
+(() => {{
+  const selectors = {json.dumps(COMPOSER_QUERY_SELECTORS)};
   const el = selectors.map(s => document.querySelector(s)).find(Boolean);
   if (!el) return false;
   el.focus();
-  if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
+  if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {{
     el.value = '';
-  } else {
+  }} else {{
     el.textContent = '';
-  }
-  el.dispatchEvent(new InputEvent('input', {
+  }}
+  el.dispatchEvent(new InputEvent('input', {{
     bubbles: true,
     cancelable: true,
     inputType: 'deleteContentBackward',
     data: null
-  }));
-  el.dispatchEvent(new Event('change', { bubbles: true }));
+  }}));
+  el.dispatchEvent(new Event('change', {{ bubbles: true }}));
   return true;
-})()
+}})()
 """
     return await js(page, script)
 
 
 async def click_deep_research_candidate(page):
-    script = """
-(() => {
+    script = f"""
+(() => {{
   const norm = (s) => String(s || '').replace(/\\s+/g, ' ').trim();
-  const visible = (el) => {
+  const visible = (el) => {{
     const style = window.getComputedStyle(el);
     const rect = el.getBoundingClientRect();
     return style.display !== 'none' && style.visibility !== 'hidden' &&
       rect.width > 0 && rect.height > 0;
-  };
+  }};
   const disabled = (el) =>
     el.disabled || el.getAttribute('aria-disabled') === 'true' ||
     el.getAttribute('data-disabled') === 'true';
   const composer = (el) =>
-    el.matches('textarea,input,#prompt-textarea,.ProseMirror,[role="textbox"],[contenteditable="true"]') ||
-    Boolean(el.closest('textarea,input,#prompt-textarea,.ProseMirror,[role="textbox"],[contenteditable="true"]'));
+    el.matches({json.dumps(COMPOSER_MATCH_SELECTOR)}) ||
+    Boolean(el.closest({json.dumps(COMPOSER_MATCH_SELECTOR)}));
   const labelOf = (el) => norm([
     el.getAttribute('aria-label'),
     el.getAttribute('data-testid'),
@@ -358,27 +401,27 @@ async def click_deep_research_candidate(page):
   ].filter(Boolean).join(' '));
   const deep = /(deep\\s*resear?ch|deepresearch|deepreseach|ディープ\\s*リサーチ|詳細.*リサーチ|深い.*調査|高度な.*調査)/i;
   const elements = [
-    ...document.querySelectorAll('button,[role="button"],[role="menuitem"],[role="option"],[cmdk-item],a,[data-testid],[aria-label],span,div')
+    ...document.querySelectorAll({json.dumps(MENU_SCAN_DEEP_RESEARCH)})
   ];
   const matches = elements
-    .map((el) => ({
+    .map((el) => ({{
       el,
       label: labelOf(el),
-      target: el.closest('button,[role="button"],[role="menuitem"],[role="option"],[cmdk-item],a,[data-testid]') || el
-    }))
+      target: el.closest({json.dumps(MENU_TARGET_DEEP_RESEARCH)}) || el
+    }}))
     .filter((item) => item.label && deep.test(item.label) && visible(item.el) && visible(item.target) && !disabled(item.target))
     .filter((item) => !composer(item.el) && !composer(item.target))
     .sort((a, b) => a.label.length - b.label.length);
-  for (const item of matches) {
-    try {
+  for (const item of matches) {{
+    try {{
       item.target.click();
-      return { ok: true, label: item.label.slice(0, 160) };
-    } catch (_) {
+      return {{ ok: true, label: item.label.slice(0, 160) }};
+    }} catch (_) {{
       continue;
-    }
-  }
-  return { ok: false, reason: 'deep research item not found' };
-})()
+    }}
+  }}
+  return {{ ok: false, reason: 'deep research item not found' }};
+}})()
 """
     result = await js(page, script)
     return js_object(result) or {
@@ -388,15 +431,15 @@ async def click_deep_research_candidate(page):
 
 
 async def click_tools_menu_candidate(page):
-    script = """
-(() => {
+    script = f"""
+(() => {{
   const norm = (s) => String(s || '').replace(/\\s+/g, ' ').trim();
-  const visible = (el) => {
+  const visible = (el) => {{
     const style = window.getComputedStyle(el);
     const rect = el.getBoundingClientRect();
     return style.display !== 'none' && style.visibility !== 'hidden' &&
       rect.width > 0 && rect.height > 0;
-  };
+  }};
   const disabled = (el) =>
     el.disabled || el.getAttribute('aria-disabled') === 'true' ||
     el.getAttribute('data-disabled') === 'true';
@@ -406,7 +449,7 @@ async def click_tools_menu_candidate(page):
     el.getAttribute('title'),
     el.textContent
   ].filter(Boolean).join(' '));
-  const score = (el) => {
+  const score = (el) => {{
     const label = labelOf(el).toLowerCase();
     if (!label || !visible(el) || disabled(el)) return 0;
     if (el.id === 'composer-plus-btn' || el.getAttribute('data-testid') === 'composer-plus-btn') return 8;
@@ -415,15 +458,15 @@ async def click_tools_menu_candidate(page):
     if (/composer.*plus|plus.*composer|add.*tools?/.test(label)) return 4;
     if (/添付|attach|add|追加|\\+/.test(label)) return 2;
     return 0;
-  };
-  const buttons = [...document.querySelectorAll('button,[role="button"]')]
-    .map((el) => ({ el, score: score(el), label: labelOf(el) }))
+  }};
+  const buttons = [...document.querySelectorAll({json.dumps(BUTTON_ROLE_SELECTOR)})]
+    .map((el) => ({{ el, score: score(el), label: labelOf(el) }}))
     .filter((item) => item.score > 0)
     .sort((a, b) => b.score - a.score);
-  if (!buttons.length) return { ok: false, reason: 'tools menu not found' };
+  if (!buttons.length) return {{ ok: false, reason: 'tools menu not found' }};
   buttons[0].el.click();
-  return { ok: true, label: buttons[0].label.slice(0, 160) };
-})()
+  return {{ ok: true, label: buttons[0].label.slice(0, 160) }};
+}})()
 """
     result = await js(page, script)
     return js_object(result) or {
@@ -452,7 +495,7 @@ async def is_connector_selected(page, label):
     el.textContent
   ].filter(Boolean).join(' '));
   const selected = (el) => {{
-    const target = el.closest('[aria-checked],[aria-selected],[aria-pressed],[data-state],[role="menuitemcheckbox"],[role="option"]') || el;
+    const target = el.closest({json.dumps(SELECTED_STATE_CLOSEST)}) || el;
     const state = [
       target.getAttribute('aria-checked'),
       target.getAttribute('aria-selected'),
@@ -461,7 +504,7 @@ async def is_connector_selected(page, label):
     ].join(' ').toLowerCase();
     return /true|checked|selected|on/.test(state);
   }};
-  const elements = [...document.querySelectorAll('button,[role="button"],[role="menuitem"],[role="menuitemcheckbox"],[role="option"],[data-testid],[aria-label],span,div')];
+  const elements = [...document.querySelectorAll({json.dumps(MENU_SCAN_CONNECTOR_SELECTED)})];
   for (const el of elements) {{
     const label = labelOf(el).toLowerCase();
     if (label && label.includes(wanted) && visible(el) && selected(el)) {{
@@ -495,8 +538,8 @@ async def click_connector_candidate(page, label):
     el.disabled || el.getAttribute('aria-disabled') === 'true' ||
     el.getAttribute('data-disabled') === 'true';
   const composer = (el) =>
-    el.matches('textarea,input,#prompt-textarea,.ProseMirror,[role="textbox"],[contenteditable="true"]') ||
-    Boolean(el.closest('textarea,input,#prompt-textarea,.ProseMirror,[role="textbox"],[contenteditable="true"]'));
+    el.matches({json.dumps(COMPOSER_MATCH_SELECTOR)}) ||
+    Boolean(el.closest({json.dumps(COMPOSER_MATCH_SELECTOR)}));
   const labelOf = (el) => norm([
     el.getAttribute('aria-label'),
     el.getAttribute('data-testid'),
@@ -505,7 +548,7 @@ async def click_connector_candidate(page, label):
     el.textContent
   ].filter(Boolean).join(' '));
   const selected = (el) => {{
-    const target = el.closest('[aria-checked],[aria-selected],[aria-pressed],[data-state],[role="menuitemcheckbox"],[role="option"]') || el;
+    const target = el.closest({json.dumps(SELECTED_STATE_CLOSEST)}) || el;
     const state = [
       target.getAttribute('aria-checked'),
       target.getAttribute('aria-selected'),
@@ -522,14 +565,14 @@ async def click_connector_candidate(page, label):
     return 0;
   }};
   const elements = [
-    ...document.querySelectorAll('button,[role="button"],[role="menuitem"],[role="menuitemcheckbox"],[role="option"],[cmdk-item],a,[data-testid],[aria-label],span,div')
+    ...document.querySelectorAll({json.dumps(MENU_SCAN_CONNECTOR_CANDIDATE)})
   ];
   const matches = elements
     .map((el, index) => ({{
       el,
       index,
       label: labelOf(el),
-      target: el.closest('button,[role="button"],[role="menuitem"],[role="menuitemcheckbox"],[role="option"],[cmdk-item],a,[data-testid]') || el
+      target: el.closest({json.dumps(MENU_TARGET_CONNECTOR)}) || el
     }}))
     .map((item) => ({{ ...item, score: score(item.label) }}))
     .filter((item) => item.score > 0 && visible(item.el) && visible(item.target) && !disabled(item.target))
@@ -557,15 +600,15 @@ async def click_connector_candidate(page, label):
 
 
 async def click_connector_menu_candidate(page):
-    script = """
-(() => {
+    script = f"""
+(() => {{
   const norm = (s) => String(s || '').replace(/\\s+/g, ' ').trim();
-  const visible = (el) => {
+  const visible = (el) => {{
     const style = window.getComputedStyle(el);
     const rect = el.getBoundingClientRect();
     return style.display !== 'none' && style.visibility !== 'hidden' &&
       rect.width > 0 && rect.height > 0;
-  };
+  }};
   const disabled = (el) =>
     el.disabled || el.getAttribute('aria-disabled') === 'true' ||
     el.getAttribute('data-disabled') === 'true';
@@ -575,34 +618,25 @@ async def click_connector_menu_candidate(page):
     el.getAttribute('title'),
     el.textContent
   ].filter(Boolean).join(' '));
-  const selectors = [
-    '#composer-plus-btn',
-    '[data-testid="composer-plus-btn"]',
-    'button[aria-label="Tools"]',
-    'button[aria-label*="Tools"]',
-    'button[aria-label*="ツール"]',
-    'button[aria-label*="コネクタ"]',
-    'button[aria-label*="Connectors"]',
-    'button[aria-label*="Plugins"]'
-  ];
-  for (const selector of selectors) {
+  const selectors = {json.dumps(CONNECTOR_MENU_SELECTORS)};
+  for (const selector of selectors) {{
     const el = document.querySelector(selector);
-    if (el && visible(el) && !disabled(el)) {
+    if (el && visible(el) && !disabled(el)) {{
       el.click();
-      return { ok: true, label: labelOf(el).slice(0, 160), selector };
-    }
-  }
+      return {{ ok: true, label: labelOf(el).slice(0, 160), selector }};
+    }}
+  }}
   const labelPattern = /\\b(tools?|connectors?|plugins?|apps?|mcp)\\b|ツール|コネクタ|プラグイン|アプリ|追加|添付|ファイルなどを追加|\\+/i;
-  const buttons = [...document.querySelectorAll('button,[role="button"]')];
-  for (const el of buttons) {
+  const buttons = [...document.querySelectorAll({json.dumps(BUTTON_ROLE_SELECTOR)})];
+  for (const el of buttons) {{
     const label = labelOf(el);
-    if (label && labelPattern.test(label) && visible(el) && !disabled(el)) {
+    if (label && labelPattern.test(label) && visible(el) && !disabled(el)) {{
       el.click();
-      return { ok: true, label: label.slice(0, 160), selector: 'label' };
-    }
-  }
-  return { ok: false, reason: 'connector menu not found' };
-})()
+      return {{ ok: true, label: label.slice(0, 160), selector: 'label' }};
+    }}
+  }}
+  return {{ ok: false, reason: 'connector menu not found' }};
+}})()
 """
     result = await js(page, script)
     return js_object(result) or {
@@ -697,13 +731,7 @@ async def select_deep_research_mode(page, timeout):
 
 
 async def wait_for_chat_input(page, timeout):
-    selectors = [
-        "#prompt-textarea",
-        "textarea",
-        "div[contenteditable='true']",
-        "[data-testid='composer-text-input']",
-        ".ProseMirror",
-    ]
+    selectors = COMPOSER_QUERY_SELECTORS
     deadline = time.time() + timeout
     while time.time() < deadline:
         for selector in selectors:
@@ -723,19 +751,13 @@ SEND_KEYS_MAX_CHARS = 2000
 
 # 入力欄に実際に入った文字数を読む。fill_prompt の返り値型が環境差で
 # dict にならない場合でも、DOM 実体で注入成功を確認するために使う。
-PROMPT_LENGTH_JS = """
-(() => {
-  const selectors = [
-    '#prompt-textarea',
-    'textarea',
-    "div[contenteditable='true']",
-    "[data-testid='composer-text-input']",
-    '.ProseMirror'
-  ];
+PROMPT_LENGTH_JS = f"""
+(() => {{
+  const selectors = {json.dumps(COMPOSER_QUERY_SELECTORS)};
   const el = selectors.map(s => document.querySelector(s)).find(Boolean);
-  if (!el) return { ok: false, length: 0 };
-  return { ok: true, length: (el.value || el.textContent || '').length };
-})()
+  if (!el) return {{ ok: false, length: 0 }};
+  return {{ ok: true, length: (el.value || el.textContent || '').length }};
+}})()
 """
 
 
@@ -744,13 +766,7 @@ async def fill_prompt(page, request_text):
     script = f"""
 (() => {{
   const text = {payload};
-  const selectors = [
-    '#prompt-textarea',
-    'textarea',
-    "div[contenteditable='true']",
-    "[data-testid='composer-text-input']",
-    '.ProseMirror'
-  ];
+  const selectors = {json.dumps(COMPOSER_QUERY_SELECTORS)};
   const el = selectors.map(s => document.querySelector(s)).find(Boolean);
   if (!el) return {{ ok: false, reason: 'input not found' }};
   el.focus();
@@ -788,18 +804,18 @@ async def wait_send_enabled(page, timeout):
     return False, state.get("reason", "send button not enabled")
 
 
-SEND_READY_JS = """
-(() => {
+SEND_READY_JS = f"""
+(() => {{
   const norm = (s) => String(s || '').replace(/\\s+/g, ' ').trim().toLowerCase();
-  const editorSelectors = ['#prompt-textarea', 'textarea', "div[contenteditable='true']", "[data-testid='composer-text-input']", '.ProseMirror'];
+  const editorSelectors = {json.dumps(COMPOSER_QUERY_SELECTORS)};
   const editor = editorSelectors.map(s => document.querySelector(s)).find(Boolean);
   const scopes = [];
-  if (editor) {
+  if (editor) {{
     const scoped = editor.closest('form') || editor.closest('[class*="composer"]');
     if (scoped) scopes.push(scoped);
-  }
+  }}
   scopes.push(document);
-  const score = (button) => {
+  const score = (button) => {{
     const label = norm([
       button.getAttribute('aria-label') || '',
       button.getAttribute('data-testid') || '',
@@ -812,33 +828,33 @@ SEND_READY_JS = """
     if (label === 'send' || label.includes(' send ')) return 2;
     if (label.includes('送信')) return 2;
     return 0;
-  };
-  for (const scope of scopes) {
-    const candidates = [...scope.querySelectorAll('button,[role="button"]')];
+  }};
+  for (const scope of scopes) {{
+    const candidates = [...scope.querySelectorAll({json.dumps(BUTTON_ROLE_SELECTOR)})];
     const button = candidates.sort((a, b) => score(b) - score(a)).find(b => score(b) > 0);
     if (!button) continue;
     const disabled = button.disabled || button.getAttribute('aria-disabled') === 'true';
-    if (!disabled) return { ready: true, reason: 'send-button enabled' };
-    return { ready: false, reason: 'send-button disabled (upload/processing?)' };
-  }
-  return { ready: false, reason: 'send button not found' };
-})()
+    if (!disabled) return {{ ready: true, reason: 'send-button enabled' }};
+    return {{ ready: false, reason: 'send-button disabled (upload/processing?)' }};
+  }}
+  return {{ ready: false, reason: 'send button not found' }};
+}})()
 """
 
 
 # 送信ボタンの探索: composer 配下を優先し、見つからなければ document 全体へフォールバック。
-CLICK_SEND_JS = """
-(() => {
+CLICK_SEND_JS = f"""
+(() => {{
   const norm = (s) => String(s || '').replace(/\\s+/g, ' ').trim().toLowerCase();
-  const editorSelectors = ['#prompt-textarea', 'textarea', "div[contenteditable='true']", "[data-testid='composer-text-input']", '.ProseMirror'];
+  const editorSelectors = {json.dumps(COMPOSER_QUERY_SELECTORS)};
   const editor = editorSelectors.map(s => document.querySelector(s)).find(Boolean);
   const scopes = [];
-  if (editor) {
+  if (editor) {{
     const scoped = editor.closest('form') || editor.closest('[class*="composer"]');
     if (scoped) scopes.push(scoped);
-  }
+  }}
   scopes.push(document);
-  const score = (button) => {
+  const score = (button) => {{
     const label = norm([
       button.getAttribute('aria-label') || '',
       button.getAttribute('data-testid') || '',
@@ -852,17 +868,17 @@ CLICK_SEND_JS = """
     if (label === 'send' || label.includes(' send ')) return 2;
     if (label.includes('送信')) return 2;
     return 0;
-  };
-  for (const scope of scopes) {
-    const candidates = [...scope.querySelectorAll('button,[role="button"]')];
+  }};
+  for (const scope of scopes) {{
+    const candidates = [...scope.querySelectorAll({json.dumps(BUTTON_ROLE_SELECTOR)})];
     const button = candidates.sort((a, b) => score(b) - score(a)).find(b => score(b) > 0);
-    if (button) {
+    if (button) {{
       button.click();
-      return { ok: true };
-    }
-  }
-  return { ok: false, reason: 'button not found' };
-})()
+      return {{ ok: true }};
+    }}
+  }}
+  return {{ ok: false, reason: 'button not found' }};
+}})()
 """
 
 # クリック前後の状態を比較するためのベースライン/確認シグナル。
@@ -874,16 +890,16 @@ SEND_BASELINE_JS = """
 })()
 """
 
-SEND_CONFIRM_JS = """
-(() => {
+SEND_CONFIRM_JS = f"""
+(() => {{
   const norm = (s) => String(s || '').replace(/\\s+/g, ' ').trim().toLowerCase();
   const userTurns = document.querySelectorAll('[data-message-author-role="user"]').length;
-  const stopBtn = [...document.querySelectorAll('button,[role="button"]')].some((el) => {
+  const stopBtn = [...document.querySelectorAll({json.dumps(BUTTON_ROLE_SELECTOR)})].some((el) => {{
     const label = norm([el.getAttribute('aria-label'), el.getAttribute('data-testid'), el.textContent].filter(Boolean).join(' '));
     return /stop generating|停止|生成を停止|stop streaming/.test(label);
-  });
-  return { userTurns, stopBtn };
-})()
+  }});
+  return {{ userTurns, stopBtn }};
+}})()
 """
 
 
@@ -1062,7 +1078,7 @@ COPY_LAST_REPLY_JS = """
     const buttons = [];
     for (const scope of scopes) {
       if (!scope) continue;
-      for (const el of scope.querySelectorAll('button,[role="button"]')) {
+      for (const el of scope.querySelectorAll(__BUTTON_ROLE_SELECTOR__)) {
         if (seen.has(el)) continue;
         seen.add(el);
         buttons.push(el);
@@ -1170,73 +1186,77 @@ COPY_LAST_REPLY_JS = """
   });
 })()
 """
+COPY_LAST_REPLY_JS = COPY_LAST_REPLY_JS.replace(
+    "__BUTTON_ROLE_SELECTOR__",
+    json.dumps(BUTTON_ROLE_SELECTOR),
+)
 
 
 # 応答が生成中(停止ボタン表示)かを判定。生成中にコピーすると途中で拾うため待つ。
 # あわせて、最終 assistant ターン近傍のステータス文言(経過時間・「Thinking」等)を
 # liveness signal として拾う。取得できなくても generating 判定自体には影響しない。
-IS_GENERATING_JS = """
-(() => {
+IS_GENERATING_JS = f"""
+(() => {{
   const norm = (s) => String(s || '').replace(/\\s+/g, ' ').trim().toLowerCase();
-  const btns = [...document.querySelectorAll('button,[role="button"]')];
-  const generating = btns.some((el) => {
+  const btns = [...document.querySelectorAll({json.dumps(BUTTON_ROLE_SELECTOR)})];
+  const generating = btns.some((el) => {{
     const label = norm([
       el.getAttribute('aria-label'),
       el.getAttribute('data-testid'),
       el.textContent
     ].filter(Boolean).join(' '));
     return /stop generating|停止|生成を停止|stop streaming/.test(label);
-  });
+  }});
   let status = '';
   const turns = [...document.querySelectorAll('[data-message-author-role="assistant"]')];
   const last = turns[turns.length - 1];
-  if (last) {
+  if (last) {{
     const scope = last.closest('article') || last.parentElement || last;
     const text = (scope.textContent || '').replace(/\\s+/g, ' ').trim();
-    const m = text.match(/(thinking|thought for|考え中|回答を確定中|生成中)[^.。\\n]{0,40}/i)
-      || text.match(/\\b\\d{1,2}:\\d{2}\\b/)
+    const m = text.match(/(thinking|thought for|考え中|回答を確定中|生成中)[^.。\\n]{{0,40}}/i)
+      || text.match(/\\b\\d{{1,2}}:\\d{{2}}\\b/)
       || text.match(/\\d+\\s*(秒|分|sec|s|min)\\b/i);
     if (m) status = m[0].slice(0, 60);
-  }
-  return { generating, status };
-})()
+  }}
+  return {{ generating, status }};
+}})()
 """
 
 # Oracle-derived snapshot: enough signal to decide timeout vs recover vs retry
 # without guessing from silence alone.
-BROWSER_STATE_JS = """
-(() => {
+BROWSER_STATE_JS = f"""
+(() => {{
   const norm = (s) => String(s || '').replace(/\\s+/g, ' ').trim().toLowerCase();
-  const btns = [...document.querySelectorAll('button,[role="button"]')];
-  const generating = btns.some((el) => {
+  const btns = [...document.querySelectorAll({json.dumps(BUTTON_ROLE_SELECTOR)})];
+  const generating = btns.some((el) => {{
     const label = norm([
       el.getAttribute('aria-label'),
       el.getAttribute('data-testid'),
       el.textContent
     ].filter(Boolean).join(' '));
     return /stop generating|停止|生成を停止|stop streaming/.test(label);
-  });
+  }});
   let status = '';
   const turns = [...document.querySelectorAll('[data-message-author-role="assistant"]')];
   const last = turns[turns.length - 1];
-  if (last) {
+  if (last) {{
     const scope = last.closest('article') || last.parentElement || last;
     const text = (scope.textContent || '').replace(/\\s+/g, ' ').trim();
-    const m = text.match(/(thinking|thought for|考え中|回答を確定中|生成中|pro thinking|finalizing|researching|searching)[^.。\\n]{0,40}/i)
-      || text.match(/\\b\\d{1,2}:\\d{2}\\b/)
+    const m = text.match(/(thinking|thought for|考え中|回答を確定中|生成中|pro thinking|finalizing|researching|searching)[^.。\\n]{{0,40}}/i)
+      || text.match(/\\b\\d{{1,2}}:\\d{{2}}\\b/)
       || text.match(/\\d+\\s*(秒|分|sec|s|min)\\b/i);
     if (m) status = m[0].slice(0, 60);
-  }
+  }}
   const userTurns = document.querySelectorAll('[data-message-author-role="user"]').length;
   const assistantTurns = turns.length;
   const loginRequired = Boolean(
     document.querySelector('[data-testid="login-button"], button[data-testid="login-button"]')
   );
   const composerVisible = Boolean(
-    document.querySelector('#prompt-textarea, textarea, div[contenteditable="true"], [data-testid="composer-text-input"], .ProseMirror')
+    document.querySelector({json.dumps(COMPOSER_QUERY_SELECTOR_CSV)})
   );
   let copyButtonVisible = false;
-  if (last) {
+  if (last) {{
     const article =
       last.closest('article') ||
       last.closest('[data-testid*="conversation-turn"]') ||
@@ -1244,30 +1264,30 @@ BROWSER_STATE_JS = """
       last;
     const scopes = [last, article];
     let sib = article.nextElementSibling;
-    for (let i = 0; i < 2 && sib; i += 1, sib = sib.nextElementSibling) {
+    for (let i = 0; i < 2 && sib; i += 1, sib = sib.nextElementSibling) {{
       if (sib.querySelector?.('[data-message-author-role="user"]')) break;
       if (sib.getAttribute?.('data-message-author-role') === 'user') break;
       scopes.push(sib);
-    }
-    for (const scope of scopes) {
+    }}
+    for (const scope of scopes) {{
       if (!scope) continue;
-      if (scope.querySelector('button[data-testid="copy-turn-action-button"]')) {
+      if (scope.querySelector('button[data-testid="copy-turn-action-button"]')) {{
         copyButtonVisible = true;
         break;
-      }
-    }
-    if (!copyButtonVisible) {
+      }}
+    }}
+    if (!copyButtonVisible) {{
       const seen = new Set();
       const buttons = [];
-      for (const scope of scopes) {
+      for (const scope of scopes) {{
         if (!scope) continue;
-        for (const btn of scope.querySelectorAll('button,[role="button"]')) {
+        for (const btn of scope.querySelectorAll({json.dumps(BUTTON_ROLE_SELECTOR)})) {{
           if (seen.has(btn)) continue;
           seen.add(btn);
           buttons.push(btn);
-        }
-      }
-      copyButtonVisible = buttons.some((btn) => {
+        }}
+      }}
+      copyButtonVisible = buttons.some((btn) => {{
         if (btn.closest('[data-message-author-role="user"]')) return false;
         if (btn.hasAttribute('download')) return false;
         const label = norm([
@@ -1278,10 +1298,10 @@ BROWSER_STATE_JS = """
         ].filter(Boolean).join(' '));
         if (/download|ダウンロード|添付/.test(label)) return false;
         return /\\bcopy\\b|コピー/.test(label) && !/code|コード|download|ダウンロード/.test(label);
-      });
-    }
-  }
-  return {
+      }});
+    }}
+  }}
+  return {{
     generating,
     status,
     userTurns,
@@ -1289,8 +1309,8 @@ BROWSER_STATE_JS = """
     loginRequired,
     composerVisible,
     copyButtonVisible
-  };
-})()
+  }};
+}})()
 """
 
 
