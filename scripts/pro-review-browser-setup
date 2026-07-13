@@ -10,6 +10,8 @@
 set -euo pipefail
 umask 077
 
+NODRIVER_PIN="${PRO_REVIEW_NODRIVER_PIN:-0.50.3}"
+
 INSTALL=0
 ASSUME_LOGGED_IN=0
 OPEN_LOGIN=0
@@ -54,7 +56,7 @@ echo "OK venv: $VENV"
 echo "OK profile: $PROFILE"
 
 if [ "$INSTALL" = "1" ]; then
-  "$VENV/bin/python" -m pip install --upgrade pip nodriver
+  "$VENV/bin/python" -m pip install --upgrade pip "nodriver==${NODRIVER_PIN}"
 fi
 
 if "$VENV/bin/python" - <<'PY' >/dev/null 2>&1

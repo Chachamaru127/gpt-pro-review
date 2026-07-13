@@ -54,4 +54,6 @@ assert_file_exists "$PROFILE/.chatgpt-login-ok" "T4 marker via user alias"
 assert_contains "$OUT4" "OK login" "T4 marker recognized"
 assert_contains "$OUT4" "close the dedicated Chrome window" "T4 close-browser warning"
 
+assert_contains "$(cat "$SETUP")" 'nodriver==${NODRIVER_PIN}' "T5 nodriver version pin"
+
 echo "[test-browser-setup] PASS"

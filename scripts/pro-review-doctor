@@ -36,7 +36,8 @@ for s in \
   fi
 done
 
-BROWSER_PY="$BASE/browser/venv/bin/python"
+VENV="$BASE/browser/venv"
+BROWSER_PY="$VENV/bin/python"
 if [ -x "$BROWSER_PY" ] && "$BROWSER_PY" - <<'PY' >/dev/null 2>&1
 import nodriver  # noqa: F401
 PY
@@ -49,6 +50,16 @@ then
   ok "nodriver" "python module importable"
 else
   manual "nodriver" "not installed; Path A live mode will use fallback"
+fi
+
+ND_VER=""
+if [ -x "$BROWSER_PY" ]; then
+  ND_VER=$("$BROWSER_PY" -c "import importlib.metadata as m; print(m.version('nodriver'))" 2>/dev/null || true)
+fi
+if [ -n "$ND_VER" ]; then
+  ok "nodriver_version" "$ND_VER"
+else
+  manual "nodriver_version" "not installed"
 fi
 
 if command -v tunnel-client >/dev/null 2>&1 || [ -x "$BASE/bin/tunnel-client" ]; then

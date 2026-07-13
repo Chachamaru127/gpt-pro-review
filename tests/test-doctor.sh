@@ -33,10 +33,13 @@ assert_contains "$OUT" "script:pro-review-mcp" "T1 scripts checked"
 assert_contains "$OUT" "env_file" "T1 env file checked"
 assert_contains "$OUT" "api_key" "T1 api key presence checked"
 assert_not_contains "$OUT" "sk-proj-secretsecretsecretsecret" "T1 secret value not printed"
+assert_contains "$OUT" "nodriver_version" "T1 nodriver version checked"
+assert_contains "$OUT" "not installed" "T1 nodriver version fallback"
 
 mkdir -p "$TMP_HOME/.pro-review/browser/venv/bin"
 cat > "$TMP_HOME/.pro-review/browser/venv/bin/python" <<'EOF'
 #!/usr/bin/env bash
+[ "${1:-}" = "-c" ] && exit 0
 cat >/dev/null
 exit 0
 EOF
