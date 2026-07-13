@@ -12,7 +12,7 @@
 #
 # 使い方:
 #   pro-review-browser-embed <repo> <project> [--question Q] [--github-branch BRANCH]
-#     [--web-search auto|on|off] [--deep-research auto|on|off] [--no-clip]
+#     [--packet-file PATH] [--web-search auto|on|off] [--deep-research auto|on|off] [--no-clip]
 #
 # 出力（後段スクリプト/エージェントが parse する。説明を足さないこと）:
 #   project_name: <project>
@@ -33,6 +33,7 @@ shift || true
 
 QUESTION=""
 GH_BRANCH=""
+PACKET_FILE=""
 WEB_SEARCH="auto"
 DEEP_RESEARCH="auto"
 NO_CLIP=0
@@ -40,6 +41,7 @@ while [ "${1:-}" ]; do
   case "$1" in
     --question)       QUESTION="${2:-}"; shift 2;;
     --github-branch)  GH_BRANCH="${2:-}"; shift 2;;
+    --packet-file)    PACKET_FILE="${2:-}"; shift 2;;
     --web-search)     WEB_SEARCH="${2:-}"; shift 2;;
     --deep-research)  DEEP_RESEARCH="${2:-}"; shift 2;;
     --no-clip)        NO_CLIP=1; shift;;
@@ -85,6 +87,7 @@ CLIP_FLAG=""
 # GitHub ブランチ指定時はコード非埋込、未指定時は embed
 EXTRA=()
 [ -n "$GH_BRANCH" ] && EXTRA+=(--github-branch "$GH_BRANCH")
+[ -n "$PACKET_FILE" ] && EXTRA+=(--packet-file "$PACKET_FILE")
 EXTRA+=(--web-search "$WEB_SEARCH" --deep-research "$DEEP_RESEARCH")
 
 # stderr は親に流す（secret scan ヒット時の理由を見せたい）

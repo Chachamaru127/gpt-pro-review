@@ -8,7 +8,7 @@ umask 077
 
 usage() {
   cat >&2 <<EOF
-usage: pro-review-browser-run <repo> [project] [--question "..."] [--fixture-html page.html] [--timeout sec] [--web-search auto|on|off] [--deep-research auto|on|off]
+usage: pro-review-browser-run <repo> [project] [--question "..."] [--packet-file PATH] [--fixture-html page.html] [--timeout sec] [--web-search auto|on|off] [--deep-research auto|on|off]
 EOF
   exit 2
 }
@@ -17,6 +17,7 @@ REPO="${1:-}"; [ -n "$REPO" ] || usage; shift
 PROJECT=""
 QUESTION=""
 FIXTURE_HTML=""
+PACKET_FILE=""
 # Pro の生成は分単位。生成待ち既定を Pro 向けに長めにする（--timeout で上書き可）。
 TIMEOUT="${TIMEOUT:-600}"
 WEB_SEARCH="auto"
@@ -25,6 +26,7 @@ if [ "${1:-}" ] && [ "${1#--}" = "$1" ]; then PROJECT="$1"; shift; fi
 while [ "${1:-}" ]; do
   case "$1" in
     --question) QUESTION="${2:-}"; shift 2;;
+    --packet-file) PACKET_FILE="${2:-}"; shift 2;;
     --fixture-html) FIXTURE_HTML="${2:-}"; shift 2;;
     --timeout) TIMEOUT="${2:-600}"; shift 2;;
     --web-search) WEB_SEARCH="${2:-}"; shift 2;;
@@ -52,12 +54,14 @@ maybe_open_login() {
   echo "login_next: log in in the opened browser, close that Chrome window, then run: pro-review-browser-setup --mark-logged-in"
   printf 'login_rerun: pro-review-run --pro --repo %q --project %q' "$REPO" "$PROJECT"
   [ -n "$QUESTION" ] && printf ' --question %q' "$QUESTION"
+  [ -n "$PACKET_FILE" ] && printf ' --packet-file %q' "$PACKET_FILE"
   printf ' --web-search %q --deep-research %q\n' "$WEB_SEARCH" "$DEEP_RESEARCH"
 }
 
 EMBED_ARGS=("$REPO")
 [ -n "$PROJECT" ] && EMBED_ARGS+=("$PROJECT")
 [ -n "$QUESTION" ] && EMBED_ARGS+=(--question "$QUESTION")
+[ -n "$PACKET_FILE" ] && EMBED_ARGS+=(--packet-file "$PACKET_FILE")
 EMBED_ARGS+=(--web-search "$WEB_SEARCH" --deep-research "$DEEP_RESEARCH")
 EMBED_ARGS+=(--no-clip)
 

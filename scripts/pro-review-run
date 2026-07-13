@@ -5,7 +5,7 @@
 # これにより「使っている間だけ・そのプロジェクトだけ」露出する。
 #
 # 使い方:
-#   pro-review-run --pro --repo <repo> [--project name] [--question "..."] [--fixture-html page.html]
+#   pro-review-run --pro --repo <repo> [--project name] [--question "..."] [--packet-file PATH] [--fixture-html page.html]
 #     [--web-search auto|on|off] [--deep-research auto|on|off]
 #   pro-review-run --thinking --repo <repo> [--project name] [--question "..."]
 #     [--timeout sec] [--drive-timeout sec] [--connector-label "..."] [--fixture-html page.html]
@@ -21,6 +21,7 @@ if printf '%s\n' "$@" | grep -qE '^--(pro|thinking|repo|project|fixture-html)$';
   REPO=""
   PROJECT=""
 	  QUESTION=""
+	  PACKET_FILE=""
 	  FIXTURE_HTML=""
 	  TIMEOUT=""
 	  DRIVE_TIMEOUT=""
@@ -35,6 +36,7 @@ if printf '%s\n' "$@" | grep -qE '^--(pro|thinking|repo|project|fixture-html)$';
       --repo) REPO="${2:-}"; shift 2;;
       --project) PROJECT="${2:-}"; shift 2;;
 	      --question) QUESTION="${2:-}"; shift 2;;
+	      --packet-file) PACKET_FILE="${2:-}"; shift 2;;
 	      --fixture-html) FIXTURE_HTML="${2:-}"; shift 2;;
 	      --timeout) TIMEOUT="${2:-}"; shift 2;;
 	      --drive-timeout) DRIVE_TIMEOUT="${2:-}"; shift 2;;
@@ -50,6 +52,7 @@ if printf '%s\n' "$@" | grep -qE '^--(pro|thinking|repo|project|fixture-html)$';
 	    ARGS=("$REPO")
 	    [ -n "$PROJECT" ] && ARGS+=("$PROJECT")
 	    [ -n "$QUESTION" ] && ARGS+=(--question "$QUESTION")
+	    [ -n "$PACKET_FILE" ] && ARGS+=(--packet-file "$PACKET_FILE")
 	    [ -n "$FIXTURE_HTML" ] && ARGS+=(--fixture-html "$FIXTURE_HTML")
 	    [ -n "$TIMEOUT" ] && ARGS+=(--timeout "$TIMEOUT")
 	    ARGS+=(--web-search "$WEB_SEARCH" --deep-research "$DEEP_RESEARCH")

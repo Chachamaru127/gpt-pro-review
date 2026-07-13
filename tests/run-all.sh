@@ -38,6 +38,7 @@ TESTS=(
   "test-danger-mode.sh"
   "test-recover.sh"
   "test-omission-warn.sh"
+  "test-packet-file.sh"
 )
 
 pass=0; fail=0
