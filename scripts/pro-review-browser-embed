@@ -68,7 +68,7 @@ if [ ! -d "$REPO" ]; then
   exit 2
 fi
 
-SK="$HOME/.claude/skills/gpt-pro-review/scripts"
+SK="${PRO_REVIEW_SCRIPTS_DIR:-$HOME/.claude/skills/gpt-pro-review/scripts}"
 BASE="$HOME/.pro-review"
 INBOX="$BASE/inbox/$PROJECT"
 OUTBOX="$BASE/outbox"

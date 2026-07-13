@@ -8,7 +8,6 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/_assert.sh"
 
 CMD="$(local_start_cmd)"
-trap 'rm -rf "$(dirname "$CMD")"' EXIT
 [ -x "$CMD" ] || _fail "pro-review-start not executable: $CMD"
 
 echo "[test-start-template] start"

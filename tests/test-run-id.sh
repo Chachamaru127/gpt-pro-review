@@ -14,7 +14,6 @@ WA="$REPO_SCRIPTS/pro-review-watch"
 FI="$REPO_SCRIPTS/pro-review-finish"
 GEN="$REPO_SCRIPTS/pro-review-gen-run-id"
 BUILD="$REPO_SCRIPTS/build-review-packet"
-trap 'rm -rf "$(dirname "$BE")" "$(dirname "$ST")"' EXIT
 
 for f in "$BE" "$ST" "$SR" "$WA" "$FI" "$GEN" "$BUILD"; do
   [ -x "$f" ] || _fail "executable missing: $f"
@@ -36,7 +35,6 @@ PROJECT="rid-be-$$"
 FAKE_SINCE=1700000099
 patched="$(mktemp -d -t prr-be2-XXXXXX)"
 sed \
-  -e "s|SK=\"\$HOME/.claude/skills/gpt-pro-review/scripts\"|SK=\"$REPO_SCRIPTS\"|" \
   -e 's|SINCE="$(date +%s)"|SINCE="1700000099"|' \
   "$REPO_SCRIPTS/pro-review-browser-embed" > "$patched/embed-fixed-since"
 chmod +x "$patched/embed-fixed-since"
@@ -64,7 +62,6 @@ REPO=$(mkrepo)
 PROJECT="rid-st-$$"
 patched2="$(mktemp -d -t prr-st2-XXXXXX)"
 sed \
-  -e "s|SK=\"\$HOME/.claude/skills/gpt-pro-review/scripts\"|SK=\"$REPO_SCRIPTS\"|" \
   -e 's|SINCE=$(date +%s)|SINCE=1700000099|' \
   "$REPO_SCRIPTS/pro-review-start" > "$patched2/start-fixed-since"
 chmod +x "$patched2/start-fixed-since"

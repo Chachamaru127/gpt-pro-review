@@ -84,7 +84,7 @@ while [ "${1:-}" ]; do
   esac
 done
 
-SK="$HOME/.claude/skills/gpt-pro-review/scripts"
+SK="${PRO_REVIEW_SCRIPTS_DIR:-$HOME/.claude/skills/gpt-pro-review/scripts}"
 BASE="$HOME/.pro-review"
 mkdir -p "$BASE"
 chmod 700 "$BASE" 2>/dev/null || true

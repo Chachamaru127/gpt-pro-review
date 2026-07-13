@@ -5,7 +5,7 @@
 set -euo pipefail
 
 PROFILE="pro-review"
-MCP_CMD="${PRO_REVIEW_MCP_CMD:-$HOME/.claude/skills/gpt-pro-review/scripts/pro-review-mcp}"
+MCP_CMD="${PRO_REVIEW_MCP_CMD:-${PRO_REVIEW_SCRIPTS_DIR:-$HOME/.claude/skills/gpt-pro-review/scripts}/pro-review-mcp}"
 export PATH="$HOME/.pro-review/bin:$PATH"
 export HEALTH_LISTEN_ADDR="${HEALTH_LISTEN_ADDR:-127.0.0.1:0}"
 export HEALTH_URL_FILE="${HEALTH_URL_FILE:-$HOME/.pro-review/health.url}"

@@ -8,7 +8,6 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/_assert.sh"
 
 BE="$(local_browser_embed_cmd)"
-trap 'rm -rf "$(dirname "$BE")"' EXIT
 REPO_SCRIPTS="$(repo_scripts_dir)"
 SR="$REPO_SCRIPTS/pro-review-save-reply"
 WA="$REPO_SCRIPTS/pro-review-watch"

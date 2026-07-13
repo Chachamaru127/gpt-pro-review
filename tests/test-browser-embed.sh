@@ -16,7 +16,6 @@ source "$SCRIPT_DIR/_assert.sh"
 export PRO_REVIEW_FORCE_SCAN=1
 
 CMD="$(local_browser_embed_cmd)"
-trap 'rm -rf "$(dirname "$CMD")"' EXIT
 [ -x "$CMD" ] || _fail "pro-review-browser-embed not executable at $CMD"
 
 echo "[test-browser-embed] start"
