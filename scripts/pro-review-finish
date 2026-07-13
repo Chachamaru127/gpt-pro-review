@@ -94,11 +94,13 @@ conversation_url = None
 if os.path.isfile(drive_script):
     mod = importlib.machinery.SourceFileLoader("prr_browser_drive_meta", drive_script).load_module()
     conversation_url = mod.load_persisted_conversation_url(run_id)
+prev_run_id = os.environ.get("PRO_REVIEW_PREVIOUS_RUN_ID") or None
 data = {
     "mode": os.environ.get("PRO_REVIEW_REPORT_MODE", "unknown"),
     "project": project,
     "since": since,
     "run_id": run_id,
+    "previous_run_id": prev_run_id,
     "request": "request.md" if request_found == "true" else None,
     "reply": "reply.md",
     "report": "reply.md",

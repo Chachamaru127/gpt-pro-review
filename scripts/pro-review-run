@@ -5,7 +5,8 @@
 # これにより「使っている間だけ・そのプロジェクトだけ」露出する。
 #
 # 使い方:
-#   pro-review-run --pro --repo <repo> [--project name] [--question "..."] [--packet-file PATH] [--fixture-html page.html]
+#   pro-review-run --pro --repo <repo> [--project name] [--question "..."] [--packet-file PATH]
+#     [--followup <prev_run_id>] [--fixture-html page.html]
 #     [--web-search auto|on|off] [--deep-research auto|on|off]
 #   pro-review-run --thinking --repo <repo> [--project name] [--question "..."]
 #     [--timeout sec] [--drive-timeout sec] [--connector-label "..."] [--fixture-html page.html]
@@ -22,6 +23,8 @@ if printf '%s\n' "$@" | grep -qE '^--(pro|thinking|repo|project|fixture-html)$';
   PROJECT=""
 	  QUESTION=""
 	  PACKET_FILE=""
+	  FOLLOWUP=""
+	  FOLLOWUP_PACKET=""
 	  FIXTURE_HTML=""
 	  TIMEOUT=""
 	  DRIVE_TIMEOUT=""
@@ -37,18 +40,133 @@ if printf '%s\n' "$@" | grep -qE '^--(pro|thinking|repo|project|fixture-html)$';
       --project) PROJECT="${2:-}"; shift 2;;
 	      --question) QUESTION="${2:-}"; shift 2;;
 	      --packet-file) PACKET_FILE="${2:-}"; shift 2;;
+	      --followup) FOLLOWUP="${2:-}"; shift 2;;
 	      --fixture-html) FIXTURE_HTML="${2:-}"; shift 2;;
 	      --timeout) TIMEOUT="${2:-}"; shift 2;;
 	      --drive-timeout) DRIVE_TIMEOUT="${2:-}"; shift 2;;
 	      --connector-label) CONNECTOR_LABEL="${2:-}"; shift 2;;
 	      --web-search) WEB_SEARCH="${2:-}"; TOOL_POLICY_EXPLICIT=1; shift 2;;
 	      --deep-research) DEEP_RESEARCH="${2:-}"; TOOL_POLICY_EXPLICIT=1; shift 2;;
-	      *) echo "usage: pro-review-run --pro|--thinking --repo <repo> [--project name] [--question ...] [--web-search auto|on|off] [--deep-research auto|on|off] [--timeout sec] [--drive-timeout sec] [--connector-label label]" >&2; exit 2;;
+	      *) echo "usage: pro-review-run --pro|--thinking --repo <repo> [--project name] [--question ...] [--packet-file PATH] [--followup prev_run_id] [--web-search auto|on|off] [--deep-research auto|on|off] [--timeout sec] [--drive-timeout sec] [--connector-label label]" >&2; exit 2;;
     esac
   done
   [ -n "$MODE" ] || { echo "[error] --pro or --thinking is required" >&2; exit 2; }
   [ -n "$REPO" ] || { echo "[error] --repo is required" >&2; exit 2; }
+  if [ -n "$FOLLOWUP" ] && [ "$MODE" != "pro" ]; then
+    echo "[error] --followup is only valid with --pro" >&2
+    exit 2
+  fi
+  if [ -n "$FOLLOWUP" ] && [ -n "$PACKET_FILE" ]; then
+    echo "[error] --followup and --packet-file are mutually exclusive" >&2
+    exit 2
+  fi
   if [ "$MODE" = "pro" ]; then
+    if [ -n "$FOLLOWUP" ]; then
+      if [ ! -d "$REPO" ]; then
+        echo "[error] repo does not exist: $REPO" >&2
+        exit 2
+      fi
+      if [ -z "$PROJECT" ]; then
+        PROJECT="$(basename "$(cd "$REPO" && pwd)")"
+      fi
+      if ! printf '%s' "$PROJECT" | grep -qE '^[A-Za-z0-9._-]+$'; then
+        echo "[error] invalid project name: '$PROJECT'" >&2
+        exit 2
+      fi
+      SUMMARY="$HOME/.pro-review/reports/$PROJECT/$FOLLOWUP/summary.json"
+      if [ ! -f "$SUMMARY" ]; then
+        echo "[error] followup summary not found: $SUMMARY" >&2
+        echo "  expected previous run bundle at reports/$PROJECT/$FOLLOWUP/" >&2
+        exit 1
+      fi
+      FOLLOWUP_PACKET=$(mktemp -t prr-followup-packet-XXXXXX.md)
+      chmod 600 "$FOLLOWUP_PACKET" 2>/dev/null || true
+      cleanup_followup_packet() { rm -f "$FOLLOWUP_PACKET" 2>/dev/null || true; }
+      trap cleanup_followup_packet EXIT INT TERM
+      if ! python3 - "$SUMMARY" "$REPO" "$FOLLOWUP_PACKET" <<'PY'; then
+import json, os, subprocess, sys
+
+summary_path, repo, out_path = sys.argv[1:4]
+DIFF_LIMIT = 30_000
+
+with open(summary_path, encoding="utf-8") as f:
+    summary = json.load(f)
+findings = summary.get("findings") or []
+
+def esc_cell(value):
+    return str(value or "").replace("|", "\\|").replace("\n", " ")
+
+def git_diff(path):
+    if not os.path.isdir(os.path.join(path, ".git")):
+        return ""
+    r = subprocess.run(
+        ["git", "diff", "-M", "-C", "--find-copies-harder", "HEAD"],
+        cwd=path,
+        capture_output=True,
+        text=True,
+    )
+    if r.returncode != 0:
+        sys.stderr.write(r.stderr or "git diff failed\n")
+        sys.exit(1)
+    return r.stdout
+
+lines = []
+lines.append("# Follow-up review (前回指摘の再確認)")
+lines.append("")
+lines.append(
+    "前回レビューの各 finding について、下表の ID ごとに "
+    "`resolved` / `still-open` / `new`（新規指摘は new として追加）を判定し、"
+    "次の形式で回答してください:"
+)
+lines.append("")
+lines.append("- <finding_id>: <verdict> — 理由")
+lines.append("")
+lines.append("新たに見つけた指摘がある場合は `new` として同形式で追加してください。")
+lines.append("")
+lines.append("## 前回 findings")
+lines.append("")
+lines.append("| id | severity | file:line | title | decision |")
+lines.append("| --- | --- | --- | --- | --- |")
+for finding in findings:
+    loc = f"{finding.get('file', '')}:{finding.get('line', '')}"
+    lines.append(
+        "| {id} | {severity} | {loc} | {title} | {decision} |".format(
+            id=esc_cell(finding.get("id", "")),
+            severity=esc_cell(finding.get("severity", "")),
+            loc=esc_cell(loc),
+            title=esc_cell(finding.get("title", "")),
+            decision=esc_cell(finding.get("decision", "")),
+        )
+    )
+lines.append("")
+lines.append("## 修正 diff")
+lines.append("")
+diff = git_diff(repo)
+if diff:
+    clipped = len(diff) > DIFF_LIMIT
+    if clipped:
+        diff = diff[:DIFF_LIMIT]
+    lines.append("```diff")
+    lines.append(diff.rstrip("\n"))
+    lines.append("```")
+    if clipped:
+        lines.append("")
+        lines.append(f"(diff clipped at {DIFF_LIMIT} characters)")
+else:
+    lines.append("_（未コミットの変更 diff なし）_")
+
+text = "\n".join(lines).rstrip() + "\n"
+fd = os.open(out_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+with os.fdopen(fd, "w", encoding="utf-8") as f:
+    f.write(text)
+PY
+        cleanup_followup_packet
+        trap - EXIT INT TERM
+        exit 1
+      fi
+      PACKET_FILE="$FOLLOWUP_PACKET"
+      export PRO_REVIEW_PREVIOUS_RUN_ID="$FOLLOWUP"
+    fi
 	    ARGS=("$REPO")
 	    [ -n "$PROJECT" ] && ARGS+=("$PROJECT")
 	    [ -n "$QUESTION" ] && ARGS+=(--question "$QUESTION")
@@ -56,6 +174,13 @@ if printf '%s\n' "$@" | grep -qE '^--(pro|thinking|repo|project|fixture-html)$';
 	    [ -n "$FIXTURE_HTML" ] && ARGS+=(--fixture-html "$FIXTURE_HTML")
 	    [ -n "$TIMEOUT" ] && ARGS+=(--timeout "$TIMEOUT")
 	    ARGS+=(--web-search "$WEB_SEARCH" --deep-research "$DEEP_RESEARCH")
+	    if [ -n "$FOLLOWUP_PACKET" ]; then
+	      "$SK_DIR/pro-review-browser-run" "${ARGS[@]}"
+	      RC=$?
+	      cleanup_followup_packet
+	      trap - EXIT INT TERM
+	      exit "$RC"
+	    fi
 	    exec "$SK_DIR/pro-review-browser-run" "${ARGS[@]}"
 	  fi
   if [ "$MODE" = "thinking" ]; then

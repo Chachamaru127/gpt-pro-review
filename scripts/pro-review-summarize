@@ -35,6 +35,11 @@ FILE_LINE_RE = re.compile(
 FILE_ONLY_RE = re.compile(r"^(?P<file>[\w./-]+)$")
 SPLIT_LINE_RE = re.compile(r"^:(?P<line>\d+)(?:-\d+)?\s*[—:-]\s*(?P<title>.*)$")
 RECOMMEND_RE = re.compile(r"^(?:推奨修正|recommendation)\s*[:：]\s*(?P<text>.*)$", re.I)
+FOLLOWUP_VERDICT_RE = re.compile(
+    r"^\s*-\s*(?P<id>f-[0-9a-f]{12}(?:-\d+)?)\s*:\s*"
+    r"(?P<verdict>resolved|still-open|new)\b",
+    re.I,
+)
 
 
 def normalize_severity(severity):
@@ -252,6 +257,19 @@ def parse_reply(text):
     return findings
 
 
+def parse_followup_verdicts(text):
+    verdicts = {}
+    for raw in text.splitlines():
+        match = FOLLOWUP_VERDICT_RE.match(raw.strip())
+        if not match:
+            continue
+        verdict = match.group("verdict").lower()
+        if verdict != "still-open":
+            verdict = verdict.replace("_", "-")
+        verdicts[match.group("id")] = verdict
+    return verdicts
+
+
 def write_text_0600(path, text):
     directory = os.path.dirname(os.path.abspath(path)) or "."
     os.makedirs(directory, exist_ok=True)
@@ -302,6 +320,7 @@ def main():
         text = f.read().decode("utf-8", errors="replace")
     findings = parse_reply(text)
     assign_finding_ids(findings)
+    followup_verdicts = parse_followup_verdicts(text)
     counts = {}
     for finding in findings:
         counts[finding["decision"]] = counts.get(finding["decision"], 0) + 1
@@ -311,6 +330,8 @@ def main():
         "counts": counts,
         "findings": findings,
     }
+    if followup_verdicts:
+        summary["followup_verdicts"] = followup_verdicts
     payload = json.dumps(summary, ensure_ascii=False, indent=2)
     if args.json_out:
         write_text_0600(args.json_out, payload + "\n")

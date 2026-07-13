@@ -40,6 +40,7 @@ TESTS=(
   "test-recover.sh"
   "test-omission-warn.sh"
   "test-packet-file.sh"
+  "test-followup.sh"
 )
 
 pass=0; fail=0
