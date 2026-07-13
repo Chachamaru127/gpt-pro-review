@@ -3,7 +3,7 @@
 # 失敗があれば exit 1。
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-cd "$HOME"  # 安全な cwd
+cd "$HOME" || exit 1  # 安全な cwd
 
 TESTS=(
   "test-syntax-check.sh"
@@ -43,6 +43,7 @@ TESTS=(
   "test-omission-warn.sh"
   "test-packet-file.sh"
   "test-followup.sh"
+  "test-ci-workflow.sh"
 )
 
 pass=0; fail=0

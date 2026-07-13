@@ -4,7 +4,7 @@
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-cd "$HOME"  # 安全な cwd（run-all.sh と同様）
+cd "$HOME" || exit 1  # 安全な cwd（run-all.sh と同様）
 
 failures=0
 checked=0
@@ -13,7 +13,7 @@ skipped=0
 _rel() {
   local p="$1"
   case "$p" in
-    "$REPO_ROOT"/*) echo "${p#$REPO_ROOT/}";;
+    "$REPO_ROOT"/*) echo "${p#"$REPO_ROOT"/}";;
     *) echo "$p";;
   esac
 }

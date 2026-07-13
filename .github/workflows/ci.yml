@@ -1,0 +1,124 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run tests
+        run: bash tests/run-all.sh
+
+      - name: Install shellcheck
+        run: |
+          if ! command -v shellcheck >/dev/null 2>&1; then
+            brew install shellcheck
+          fi
+          shellcheck --version
+
+      - name: shellcheck
+        run: |
+          set -euo pipefail
+          repo_root="$GITHUB_WORKSPACE"
+          failures=0
+          checked=0
+
+          is_bash_script() {
+            local f="$1"
+            case "${f##*.}" in
+              sh) ;;
+              *)
+                local first_line=""
+                IFS= read -r first_line < "$f" || return 1
+                case "$first_line" in
+                  \#!/usr/bin/env\ bash*|\#!/bin/bash*|\#!/usr/bin/env\ sh*|\#!/bin/sh*) ;;
+                  *) return 1;;
+                esac
+                ;;
+            esac
+            local ft=""
+            ft="$(file -b "$f")"
+            case "$ft" in
+              *"Bourne-Again shell"*|*"POSIX shell"*) return 0;;
+              *) return 1;;
+            esac
+          }
+
+          run_shellcheck() {
+            local f="$1"
+            if [[ "$f" == "$repo_root"/tests/* ]]; then
+              if shellcheck -x -P "$repo_root/tests" "$f"; then
+                echo "  ok  shellcheck: ${f#$repo_root/}"
+              else
+                echo "FAIL: shellcheck: ${f#$repo_root/}" >&2
+                failures=$((failures + 1))
+              fi
+            elif shellcheck "$f"; then
+              echo "  ok  shellcheck: ${f#$repo_root/}"
+            else
+              echo "FAIL: shellcheck: ${f#$repo_root/}" >&2
+              failures=$((failures + 1))
+            fi
+            checked=$((checked + 1))
+          }
+
+          for f in "$repo_root"/scripts/*; do
+            [ -f "$f" ] || continue
+            if is_bash_script "$f"; then
+              run_shellcheck "$f"
+            fi
+          done
+
+          for f in "$repo_root"/tests/*.sh; do
+            [ -f "$f" ] || continue
+            run_shellcheck "$f"
+          done
+
+          echo "shellcheck: checked=$checked failures=$failures"
+          [ "$failures" -eq 0 ]
+
+      - name: py_compile
+        run: |
+          set -euo pipefail
+          repo_root="$GITHUB_WORKSPACE"
+          failures=0
+          checked=0
+
+          is_python_script() {
+            local f="$1"
+            local first_line=""
+            IFS= read -r first_line < "$f" || return 1
+            case "$first_line" in
+              \#!/usr/bin/env\ python3*|\#!/usr/bin/python3*|\#!/usr/bin/env\ python*|\#!/usr/bin/python*) ;;
+              *) return 1;;
+            esac
+            local ft=""
+            ft="$(file -b "$f")"
+            case "$ft" in
+              *Python*) return 0;;
+              *) return 1;;
+            esac
+          }
+
+          for f in "$repo_root"/scripts/*; do
+            [ -f "$f" ] || continue
+            if is_python_script "$f"; then
+              if python3 -m py_compile "$f"; then
+                echo "  ok  py_compile: ${f#$repo_root/}"
+              else
+                echo "FAIL: py_compile: ${f#$repo_root/}" >&2
+                failures=$((failures + 1))
+              fi
+              checked=$((checked + 1))
+            fi
+          done
+
+          echo "py_compile: checked=$checked failures=$failures"
+          [ "$failures" -eq 0 ]

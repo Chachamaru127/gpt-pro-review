@@ -18,7 +18,7 @@ for f in "$ST" "$SR" "$WA" "$FI" "$MCP"; do
 done
 
 echo "[test-integration-path-b] start"
-cd "$HOME"  # 安全な cwd
+cd "$HOME" || exit 1  # 安全な cwd
 
 # Step 1: pro-review-start で依頼 + workspace snapshot を用意
 REPO=$(mkrepo)

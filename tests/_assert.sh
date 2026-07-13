@@ -4,7 +4,8 @@
 
 set -uo pipefail  # -e は呼び出し側で。アサート関数が exit 制御するため
 
-export PRO_REVIEW_SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/scripts"
+PRO_REVIEW_SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/scripts"
+export PRO_REVIEW_SCRIPTS_DIR
 
 _FAIL_PREFIX="FAIL"
 _PASS_PREFIX="ok"
@@ -66,7 +67,7 @@ mkrepo() {
   local d
   d=$(mktemp -d -t prr-test-XXXXXX)
   (
-    cd "$d"
+    cd "$d" || exit 1
     git init -q
     git config user.email "test@local"
     git config user.name  "Test"

@@ -19,7 +19,7 @@ ok() { line "OK" "$1" "$2"; }
 mkdir -p "$BASE"
 chmod 700 "$BASE" 2>/dev/null || true
 MODE=$(stat -f '%Lp' "$BASE" 2>/dev/null || echo unknown)
-[ "$MODE" = "700" ] && ok "base_mode" "~/.pro-review is 700" || need_fix "base_mode" "~/.pro-review should be 700"
+[ "$MODE" = "700" ] && ok "base_mode" "$HOME/.pro-review is 700" || need_fix "base_mode" "$HOME/.pro-review should be 700"
 
 missing=0
 for s in \

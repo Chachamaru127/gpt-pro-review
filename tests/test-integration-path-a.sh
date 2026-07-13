@@ -17,7 +17,7 @@ for f in "$BE" "$SR" "$WA" "$FI"; do
 done
 
 echo "[test-integration-path-a] start"
-cd "$HOME"  # 安全な cwd で開始（テスト中の repo 削除に巻き込まれない）
+cd "$HOME" || exit 1  # 安全な cwd で開始（テスト中の repo 削除に巻き込まれない）
 
 # Step 1: browser-embed で依頼パケットを用意
 REPO=$(mkrepo)

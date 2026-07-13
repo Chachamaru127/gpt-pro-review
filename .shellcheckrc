@@ -1,0 +1,10 @@
+# インラインの awk/grep/ヒアドキュメントで単引用符が意図的なため
+disable=SC2016
+# ls | grep はテストの可読性優先で許容
+disable=SC2012
+# テストでの説明的変数代入を許容
+disable=SC2034
+# A && B || C は本 repo で意図的なイディオムとして使用
+disable=SC2015
+# 後方互換のため残す wrapper 関数（呼び出しは外部）
+disable=SC2329
