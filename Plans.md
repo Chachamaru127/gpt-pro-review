@@ -402,7 +402,7 @@ Issue #1 のうち Phase 8 でスコープ外にした項目を別スライス�
 | Task | 内容 | DoD | Depends | Status |
 |------|------|-----|---------|--------|
 | 9.1 | [lane:gate][tdd:required] 予算超過で変更ファイルが省略された時、見落とせない形で warn する（`⚠ OMITTED` を stderr、summary に `省略 N`） | `test-omission-warn.sh` が PASS、`bash tests/run-all.sh` PASS | - | cc:完了 |
-| 9.2 | [lane:gate][tdd:required] `--packet-file PATH` で curated Markdown packet を直接使う（repo 全体再構築をスキップ。secret scan + DONE marker 注入は維持）。`build-review-packet` / `pro-review-browser-embed` / `pro-review-run --pro` に通す | fixture で curated packet が REQ になり marker 付与・scan される。直書き/添付経路は維持。run-all PASS | - | cc:TODO |
+| 9.2 | [lane:gate][tdd:required] `--packet-file PATH` で curated Markdown packet を直接使う（repo 全体再構築をスキップ。secret scan + DONE marker 注入は維持）。`build-review-packet` / `pro-review-browser-embed` / `pro-review-run --pro` に通す | fixture で curated packet が REQ になり marker 付与・scan される。直書き/添付経路は維持。run-all PASS | - | cc:完了 [4bb94ac]（Phase 12.1 で実装） |
 
 ---
 
@@ -463,22 +463,22 @@ Issue #1 のうち Phase 8 でスコープ外にした項目を別スライス�
 
 | Task | 内容 | DoD | Depends | Status |
 |------|------|-----|---------|--------|
-| 11.1 | nodriver バージョンピン。`pro-review-browser-setup:57` の unpinned install を固定し、doctor にバージョン表示を追加 [tdd:skip:mechanical-pin] | setup が固定版を入れる。doctor が版を表示。`tests/run-all.sh` pass | - | cc:TODO |
-| 11.2 | `SK="$HOME/.claude/skills/..."` ハードコード（browser-embed:71 / run:87 / start:30 / tunnel:8）を env var override 化し、`tests/_assert.sh:104-126` の sed-patch ヘルパーを廃止 | テストが prod と同一コードパスを通る。sed-patch grep 0 件。run-all pass | - | cc:TODO |
-| 11.3 | GitHub Actions CI（**macos runner** 必須: `stat -f`/pbpaste 依存）で run-all.sh + shellcheck + py_compile | push で green。shellcheck 指摘 0（既知 4 件は修正 or 明示 disable） | 11.1, 11.2 | cc:TODO |
-| 11.4 | composer セレクタ 5 点セットの共有定数化（browser-drive 内 11 箇所 → Python 定数 1 つから JS へ派生） | 重複定義 grep 0 件。既存 fixture 回帰 pass | - | cc:TODO |
-| 11.5 | fallback/timeout 時に DOM 抜粋 + screenshot を `reports/<project>/<run_id>/` に保存（`--artifact-dir` 追加、明示 `os.chmod 0o600`。umask 継承に依存しない） | fixture で artifact 生成 + 600 を検証。manual-checklist に live 1 実測 | 11.4 | cc:TODO |
-| 11.6 | 送信成功時に会話 URL を取得し `metadata.json` に保存。保存時に host==chatgpt.com 検証 | fixture で URL 記録と非 chatgpt.com 拒否を検証 | - | cc:TODO |
-| 11.7 | `pro-review-recover` の自動 re-open: 会話タブが閉じていたら metadata の URL（使用時にも host 検証）へ nodriver で遷移して extract | fixture で URL 検証 pass。manual-checklist に live 1 実測 | 11.6 | cc:TODO |
+| 11.1 | nodriver バージョンピン。`pro-review-browser-setup:57` の unpinned install を固定し、doctor にバージョン表示を追加 [tdd:skip:mechanical-pin] | setup が固定版を入れる。doctor が版を表示。`tests/run-all.sh` pass | - | cc:完了 [cf7562e] |
+| 11.2 | `SK="$HOME/.claude/skills/..."` ハードコード（browser-embed:71 / run:87 / start:30 / tunnel:8）を env var override 化し、`tests/_assert.sh:104-126` の sed-patch ヘルパーを廃止 | テストが prod と同一コードパスを通る。sed-patch grep 0 件。run-all pass | - | cc:完了 [d9d5619] |
+| 11.3 | GitHub Actions CI（**macos runner** 必須: `stat -f`/pbpaste 依存）で run-all.sh + shellcheck + py_compile | push で green。shellcheck 指摘 0（既知 4 件は修正 or 明示 disable） | 11.1, 11.2 | cc:完了 [e0b37ce] |
+| 11.4 | composer セレクタ 5 点セットの共有定数化（browser-drive 内 11 箇所 → Python 定数 1 つから JS へ派生） | 重複定義 grep 0 件。既存 fixture 回帰 pass | - | cc:完了 [322a875] |
+| 11.5 | fallback/timeout 時に DOM 抜粋 + screenshot を `reports/<project>/<run_id>/` に保存（`--artifact-dir` 追加、明示 `os.chmod 0o600`。umask 継承に依存しない） | fixture で artifact 生成 + 600 を検証。manual-checklist に live 1 実測 | 11.4 | cc:完了 [88ae9df]（live 1 実測は manual 未実施） |
+| 11.6 | 送信成功時に会話 URL を取得し `metadata.json` に保存。保存時に host==chatgpt.com 検証 | fixture で URL 記録と非 chatgpt.com 拒否を検証 | - | cc:完了 [4daaedb] |
+| 11.7 | `pro-review-recover` の自動 re-open: 会話タブが閉じていたら metadata の URL（使用時にも host 検証）へ nodriver で遷移して extract | fixture で URL 検証 pass。manual-checklist に live 1 実測 | 11.6 | cc:完了 [8ac19ab]（live 1 実測は manual 未実施） |
 
 ## Phase 12: multi-round review protocol + findings ledger（差別化の本丸）
 
 | Task | 内容 | DoD | Depends | Status |
 |------|------|-----|---------|--------|
-| 12.1 | `--packet-file PATH`（Phase 9.2 積み残しの close）。curated packet を直接投入。secret scan / DONE marker 注入は維持 | fixture で scan/marker 検証。9.2 を cc:完了 に更新 | - | cc:TODO |
-| 12.2 | findings 安定 ID。`pro-review-summarize` が内容ハッシュベースの ID（並び替え・再要約で不変）を `summary.json` に付与 [tdd:required] | 先に「reply 並び替えでも ID 不変」の失敗テストを書き pass させる | - | cc:TODO |
-| 12.3 | findings ledger `~/.pro-review/ledger/<project>.jsonl`（chmod 600、append-only）+ 集計 CLI（round 横断の resolved 率・採用率。proxy 指標である旨を出力に明記） | fixture で追記・集計・600 を検証 | 12.2 | cc:TODO |
-| 12.4 | `pro-review-run --followup <prev_run_id>`: 前回 findings 表 + 修正 diff を packet 化し**新規会話**で送信。回答は finding ID ごとに resolved / still-open / new。`metadata.json` に `previous_run_id` | fixture e2e pass。manual-checklist に live 1 round | 12.1, 12.2, 12.3 | cc:TODO |
+| 12.1 | `--packet-file PATH`（Phase 9.2 積み残しの close）。curated packet を直接投入。secret scan / DONE marker 注入は維持 | fixture で scan/marker 検証。9.2 を cc:完了 に更新 | - | cc:完了 [4bb94ac] |
+| 12.2 | findings 安定 ID。`pro-review-summarize` が内容ハッシュベースの ID（並び替え・再要約で不変）を `summary.json` に付与 [tdd:required] | 先に「reply 並び替えでも ID 不変」の失敗テストを書き pass させる | - | cc:完了 [7ec0d93] |
+| 12.3 | findings ledger `~/.pro-review/ledger/<project>.jsonl`（chmod 600、append-only）+ 集計 CLI（round 横断の resolved 率・採用率。proxy 指標である旨を出力に明記） | fixture で追記・集計・600 を検証 | 12.2 | cc:完了 [2aa6fd0] |
+| 12.4 | `pro-review-run --followup <prev_run_id>`: 前回 findings 表 + 修正 diff を packet 化し**新規会話**で送信。回答は finding ID ごとに resolved / still-open / new。`metadata.json` に `previous_run_id` | fixture e2e pass。manual-checklist に live 1 round | 12.1, 12.2, 12.3 | cc:完了 [0610be2]（live 1 round は manual 未実施） |
 
 ## Phase 13: Optional / gated（着手前にユーザー判断）
 
