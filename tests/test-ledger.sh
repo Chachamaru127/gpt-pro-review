@@ -121,11 +121,18 @@ STATS=$(HOME="$TMP_HOME" "$LEDGER" stats "$PROJECT")
 assert_exit_ok "$?" "T3 stats exit"
 assert_contains "$STATS" "total_findings: 4" "T3 total findings"
 assert_contains "$STATS" "rounds: 2" "T3 rounds"
+assert_contains "$STATS" "observed_runs: 0" "T3 observed_runs zero without reports"
 assert_contains "$STATS" "recurring_ids: 1" "T3 recurring id count"
 assert_contains "$STATS" "対応: 2 (50.0%)" "T3 対応 rate"
 assert_contains "$STATS" "見送り: 1 (25.0%)" "T3 見送り rate"
 assert_contains "$STATS" "要確認: 1 (25.0%)" "T3 要確認 rate"
 assert_contains "$STATS" "proxy 指標" "T3 proxy note present"
 assert_contains "$STATS" "客観的な正誤率ではありません" "T3 proxy disclaimer present"
+
+mkdir -p "$TMP_HOME/.pro-review/reports/$PROJECT/$RID1" \
+  "$TMP_HOME/.pro-review/reports/$PROJECT/$RID2"
+STATS2=$(HOME="$TMP_HOME" "$LEDGER" stats "$PROJECT")
+assert_exit_ok "$?" "T4 stats exit with fake reports"
+assert_contains "$STATS2" "observed_runs: 2" "T4 observed_runs matches bundle count"
 
 echo "[test-ledger] PASS"

@@ -85,5 +85,20 @@ else
   ok "danger_mode" "OFF — secret scan 有効 (既定)"
 fi
 
+REPORTS="$BASE/reports"
+RUN_COUNT=0
+PROJECT_COUNT=0
+if [ -d "$REPORTS" ]; then
+  for proj in "$REPORTS"/*; do
+    [ -d "$proj" ] || continue
+    PROJECT_COUNT=$((PROJECT_COUNT + 1))
+    for run in "$proj"/*; do
+      [ -d "$run" ] || continue
+      RUN_COUNT=$((RUN_COUNT + 1))
+    done
+  done
+fi
+ok "run_count" "$RUN_COUNT runs across $PROJECT_COUNT projects (observation only)"
+
 [ "$missing" -eq 0 ] || STATUS=1
 exit "$STATUS"

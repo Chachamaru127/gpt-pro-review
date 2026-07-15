@@ -48,4 +48,14 @@ OUT=$(HOME="$TMP_HOME" "$DOC" 2>&1)
 assert_exit_ok "$?" "T2 doctor accepts browser venv nodriver"
 assert_contains "$OUT" "OK"$'\t'"nodriver"$'\t'"venv module importable" "T2 venv nodriver checked"
 
+OUT=$(HOME="$TMP_HOME" "$DOC" 2>&1)
+assert_exit_ok "$?" "T3 doctor exit with no reports"
+assert_contains "$OUT" "OK"$'\t'"run_count"$'\t'"0 runs across 0 projects (observation only)" "T3 run_count zero without reports"
+
+mkdir -p "$TMP_HOME/.pro-review/reports/count-proj-$$/run-a" \
+  "$TMP_HOME/.pro-review/reports/count-proj-$$/run-b"
+OUT=$(HOME="$TMP_HOME" "$DOC" 2>&1)
+assert_exit_ok "$?" "T4 doctor exit with fake reports"
+assert_contains "$OUT" "OK"$'\t'"run_count"$'\t'"2 runs across 1 projects (observation only)" "T4 run_count with two bundles"
+
 echo "[test-doctor] PASS"

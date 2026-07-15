@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 
 BASE = os.path.join(os.environ.get("HOME", os.path.expanduser("~")), ".pro-review")
 LEDGER_DIR = os.path.join(BASE, "ledger")
+REPORTS_DIR = os.path.join(BASE, "reports")
 PROJECT_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 RUN_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 PROXY_NOTE = (
@@ -139,6 +140,15 @@ def pct(count, total):
     return (count / total) * 100.0
 
 
+def count_observed_runs(project):
+    path = os.path.join(REPORTS_DIR, project)
+    if not os.path.isdir(path):
+        return 0
+    return sum(
+        1 for name in os.listdir(path) if os.path.isdir(os.path.join(path, name))
+    )
+
+
 def print_stats(project):
     rows = load_rows(project)
     run_ids = {row.get("run_id", "") for row in rows}
@@ -157,6 +167,7 @@ def print_stats(project):
     print(f"project: {project}")
     print(f"total_findings: {total}")
     print(f"rounds: {len(run_ids)}")
+    print(f"observed_runs: {count_observed_runs(project)}")
     print(f"recurring_ids: {recurring}")
     print("decision_distribution:")
     for key in ("対応", "見送り", "要確認"):
