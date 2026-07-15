@@ -39,7 +39,7 @@ ChatGPT Web / Developer Mode / MCP の実利用制約と競合調査を踏まえ
 
 ## unknown_data
 
-- **GitHub 公式コネクタが Pro 通常チャットで呼べるか** (`absent` ではなく `unknown`): "custom MCP は不可" の制約が「公式コネクタにも適用されるか」は実機検証必要
+- **GitHub 公式コネクタが Pro 通常チャットで呼べるか**: Web 調査で確定（2026-07-15）— **plan/experience 依存で保証されない**。公式 Help「availability varies by plan and experience（Deep Research/Agent mode では可、標準チャットでは非表示のプランあり）」+ Pro で project チャット非表示のコミュニティ報告あり。実装は従来どおり `--github-branch` opt-in を維持（DoD 第 3 選択肢で close。実機確認は live 実走時に追記）
 - **ChatGPT UI のトークン無音切り捨て閾値**: 公式未公表。経験則で 80k bytes 程度に max-bytes を絞る
 - **claude-in-chrome の read_page が "Agent モード OFF" を DOM で取れるか**: 実機要確認（取れなければ手動チェックを SKILL.md に記載）
 
@@ -79,14 +79,14 @@ ChatGPT Web / Developer Mode / MCP の実利用制約と競合調査を踏まえ
 
 | Task | 内容 | DoD | Depends | Status |
 |------|------|-----|---------|--------|
-| 1.1 | [lane:fast][tdd:skip:investigation] GitHub 公式コネクタが Pro 通常チャットで呼べるか実機確認。WebSearch で最新事例＋できれば自分の ChatGPT で 1 回試す | 公式コネクタ可否を `unknown_data` から `confirmed` か `denied` に確定（または `unknown のまま実装は --github-branch を opt-in 必要時のみ` とする） | - | cc:TODO |
-| 1.2 | [lane:fast][tdd:skip:docs-only] Skeptic の 5 指摘＋Arch の 5 決定を SKILL.md 設計セクションに反映する草案を作る（実装はしない） | SKILL.md 改訂案 outline が `docs/skill-md-draft.md` 等に作成済（Plans.md の Phase 2 で本実装へ） | - | cc:TODO |
+| 1.1 | [lane:fast][tdd:skip:investigation] GitHub 公式コネクタが Pro 通常チャットで呼べるか実機確認。WebSearch で最新事例＋できれば自分の ChatGPT で 1 回試す | 公式コネクタ可否を `unknown_data` から `confirmed` か `denied` に確定（または `unknown のまま実装は --github-branch を opt-in 必要時のみ` とする） | - | cc:完了（DoD 第 3 選択肢: Web 調査で「experience 依存・保証なし」と判明、--github-branch opt-in 維持。unknown_data 節に出典。実機 1 回は live 実走時） |
+| 1.2 | [lane:fast][tdd:skip:docs-only] Skeptic の 5 指摘＋Arch の 5 決定を SKILL.md 設計セクションに反映する草案を作る（実装はしない） | SKILL.md 改訂案 outline が `docs/skill-md-draft.md` 等に作成済（Plans.md の Phase 2 で本実装へ） | - | cc:完了（superseded 2026-07-15: Phase 6-10 で SKILL.md 直接全面再構築済み。Skeptic 5 件は marker 正規化/state-less/ms-epoch/truncated 警告/ブラウザ消失 fallback として実装 + テスト実在。草案工程は不要化） |
 
 ## Phase 2: 実装計画確定（Spec delta）
 
 | Task | 内容 | DoD | Depends | Status |
 |------|------|-----|---------|--------|
-| 2.1 | [lane:gate][tdd:skip:docs-only] SKILL.md 全面書き直しの最終 outline 確定（Phase 1 の確認結果を反映） | outline が以下を含む: 2 パス図 / Path A 手順 / Path B 手順 / 共通 lifecycle / 退役項目 / スクリプト一覧 / Skeptic 5 件への対処明文 | 1.1, 1.2 | cc:TODO |
+| 2.1 | [lane:gate][tdd:skip:docs-only] SKILL.md 全面書き直しの最終 outline 確定（Phase 1 の確認結果を反映） | outline が以下を含む: 2 パス図 / Path A 手順 / Path B 手順 / 共通 lifecycle / 退役項目 / スクリプト一覧 / Skeptic 5 件への対処明文 | 1.1, 1.2 | cc:完了（superseded 2026-07-15: 現 SKILL.md が「2 パス」「最短コマンド」「保存契約」「退役」「非目標」「安全境界」「診断」節で DoD 要素を充足。Skeptic 対処は実装 + spec Core Rules 側に存置） |
 
 ## Phase 3: 実装（TDD・Red→Green）
 
@@ -484,9 +484,9 @@ Issue #1 のうち Phase 8 でスコープ外にした項目を別スライス�
 
 | Task | 内容 | DoD | Depends | Status |
 |------|------|-----|---------|--------|
-| 13.1 | consensus 比較ユーティリティ: 2 つの findings JSON を突き合わせ agreed / disputed の `consensus.json` を出す。**GPR は他 agent を起動しない**（第二レビュー取得は呼び出し元） | fixture で agree/dispute/片側欠落を検証 | 12.2 | cc:TODO |
+| 13.1 | consensus 比較ユーティリティ: 2 つの findings JSON を突き合わせ agreed / disputed の `consensus.json` を出す。**GPR は他 agent を起動しない**（第二レビュー取得は呼び出し元） | fixture で agree/dispute/片側欠落を検証 | 12.2 | cc:完了 [7158d2f]（2026-07-15 /goal「やれること全部」を optional 着手判断として実行） |
 | 13.2 | doctor `--selector-check`（opt-in）: chatgpt.com へ read-only 到達しセレクタ一致状況を報告。既定 OFF | opt-in でのみ動作。manual-checklist 形式で記録 | 11.4, spec Open Decision の承認 | cc:TODO |
-| 13.3 | 実行回数の観測カウンタ（表示のみ、強制なし）を doctor / ledger 集計に追加 | fixture で計数検証。cap/pacing は実装しない | 12.3 | cc:TODO |
+| 13.3 | 実行回数の観測カウンタ（表示のみ、強制なし）を doctor / ledger 集計に追加 | fixture で計数検証。cap/pacing は実装しない | 12.3 | cc:完了 [1f60423]（同上） |
 
 ## Phase 11-13 Reject 記録（2026-07-12）
 
