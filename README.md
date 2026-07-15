@@ -26,6 +26,9 @@ ChatGPT Web にコードレビューを頼み、回答をローカルに安全�
 | レビュー回答を保存する | あとで見返せる証跡にするため |
 | `DONE` マーカーで完了確認する | 別の回答や途中回答を誤って拾わないため |
 | Web Search / Deep Research 方針を指定する | 最新情報が必要な時だけ外部調査させるため |
+| 前回の指摘が直ったかを再レビューする | 「直したつもり」を ID 付きで追跡するため |
+| 指摘を台帳に記録・集計する | 採用率や再出現を数字で見るため |
+| 2 つのレビュー結果を突き合わせる | 両方が指摘した箇所から直すため |
 
 ## 使う場面
 
@@ -303,6 +306,15 @@ pro-review-recover <project> <run_id>
 
 `pro-review-run --pro` が時間切れで終わった時は、画面に `recover:` の行で実行コマンドが出ます。
 
+会話タブを閉じてしまっても大丈夫です。
+
+送信成功時に会話の URL を控えてあります（`chatgpt.com` の URL だけを受け付けます）。
+
+取り込みに失敗すると、控えた URL を自動で開き直して、もう 1 回だけ取得を試します。
+
+それでも失敗した時は、原因調査用に画面の中身（DOM 抜粋）と screenshot を
+`reports/<project>/<run_id>/` に自動保存します。
+
 ## Path B 導入
 
 Path B は Secure MCP Tunnel を使います。
@@ -392,6 +404,89 @@ pro-review-run --pro \
   easy-report.md
 ```
 
+## もう一回見てもらう（followup 再レビュー）
+
+前回の指摘が直ったかを、もう一度 ChatGPT に確認してもらえます。
+
+各指摘には ID（`f-` で始まる短い印）が付きます。
+
+ID は指摘の内容から作るので、並び順が変わっても同じ指摘は同じ ID です。
+
+```bash
+pro-review-run --pro \
+  --repo /path/to/repo \
+  --project my-review \
+  --followup <前回の run_id>
+```
+
+送る内容は 3 点セットです。
+
+1. 前回の指摘一覧（ID 付きの表）
+2. その後の修正 diff（= 何をどう変えたか）
+3. 「ID ごとに `resolved` / `still-open` / `new` で答えて」という指示
+
+毎回、新しい会話として送ります。
+
+前の会話の続きには書き込みません。
+
+結果の `metadata.json` に `previous_run_id` が入り、round 同士がつながります。
+
+## 指摘を台帳に残す（ledger）
+
+レビューのたびに指摘を記録して、あとから数字で振り返れます。
+
+```bash
+pro-review-ledger append <project> <summary.json のパス> --run-id <run_id>
+pro-review-ledger stats <project>
+```
+
+`stats` が出すもの:
+
+| 項目 | 意味 |
+|---|---|
+| `total_findings` | 記録した指摘の総数 |
+| `rounds` | レビューした回数 |
+| `observed_runs` | 保存されている run bundle の数（参考値） |
+| `recurring_ids` | 2 回以上出てきた指摘（= 未解決の可能性） |
+| decision の割合 | 対応 / 見送り / 要確認 の内訳 |
+
+この数字は「あなたがどれだけ採用したか」の目安です。
+
+指摘の正誤を判定するものではありません（出力にも毎回その注意が付きます）。
+
+## 2 つのレビューを突き合わせる（consensus）
+
+ChatGPT と Codex など、別々のレビュー結果を比べられます。
+
+```bash
+pro-review-consensus summary_a.json summary_b.json --out consensus.json
+```
+
+同じ file:line への指摘は `agreed` に入ります。
+
+片方だけの指摘は `only_a` / `only_b` に入ります。
+
+両方が指摘した箇所は、直す優先度が高いと判断できます。
+
+このコマンドは比較だけをします。
+
+他の AI を勝手に呼び出すことはありません。
+
+## 依頼文を自分で用意する（--packet-file）
+
+repo からの自動組み立てを飛ばして、用意した Markdown をそのまま送れます。
+
+```bash
+pro-review-run --pro \
+  --repo /path/to/repo \
+  --project my-review \
+  --packet-file my-request.md
+```
+
+この場合も secret scan と `DONE` マーカーは必ず適用されます。
+
+安全チェックを飛ばす近道ではありません。
+
 ## よくある失敗
 
 ### `FALLBACK:login required`
@@ -456,6 +551,9 @@ pro-review-tunnel-check <project>
 | `pro-review-tunnel-check <project>` | tunnel と tool を確認 |
 | `pro-review-watch` | inbox の返信を待つ |
 | `pro-review-finish` | report bundle を作る |
+| `pro-review-run --pro --followup <run_id>` | 前回指摘の再レビュー |
+| `pro-review-ledger` | 指摘台帳への記録と集計 |
+| `pro-review-consensus` | 2 つのレビュー結果の突き合わせ |
 
 ## テスト
 
@@ -464,6 +562,9 @@ pro-review-tunnel-check <project>
 ```bash
 bash tests/run-all.sh
 ```
+
+GitHub に push すると、GitHub Actions（= GitHub 上の自動テスト）が
+macOS 環境で同じテストと shellcheck（= shell script の静的検査）を実行します。
 
 個別に見たい時は次です。
 
