@@ -43,6 +43,7 @@ TESTS=(
   "test-omission-warn.sh"
   "test-packet-file.sh"
   "test-followup.sh"
+  "test-consensus.sh"
   "test-ci-workflow.sh"
 )
 

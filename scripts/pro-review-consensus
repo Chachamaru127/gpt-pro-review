@@ -1,0 +1,181 @@
+#!/usr/bin/env python3
+"""Compare two pro-review summary JSON files for agreed / only_a / only_b."""
+import argparse
+import json
+import os
+import sys
+import tempfile
+from collections import Counter
+
+
+def die(msg, code=2):
+    sys.stderr.write(f"[pro-review-consensus] error: {msg}\n")
+    sys.exit(code)
+
+
+def normalize_file(path):
+    value = str(path).lower()
+    if value.startswith("./"):
+        value = value[2:]
+    return value
+
+
+def normalize_text(value):
+    return " ".join(str(value).lower().split())
+
+
+def normalize_line(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        die(f"finding line must be an integer: {value!r}")
+
+
+def load_summary(path):
+    if not os.path.isfile(path):
+        die(f"summary not found: {path}")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except OSError as exc:
+        die(f"cannot read summary: {path}: {exc}")
+    except json.JSONDecodeError as exc:
+        die(f"invalid JSON in summary: {path}: {exc}")
+    if not isinstance(data, dict):
+        die(f"summary root must be an object: {path}")
+    findings = data.get("findings")
+    if not isinstance(findings, list):
+        die(f"summary missing findings list: {path}")
+    return findings
+
+
+def validate_finding(finding, path):
+    if not isinstance(finding, dict):
+        die(f"finding must be an object in {path}")
+    for key in ("id", "severity", "file", "line", "title"):
+        if key not in finding:
+            die(f"finding missing {key} in {path}")
+
+
+def multi_title_locations(findings):
+    counts = Counter()
+    for finding in findings:
+        counts[(normalize_file(finding["file"]), normalize_line(finding["line"]))] += 1
+    return {loc for loc, count in counts.items() if count > 1}
+
+
+def match_key(finding, multi_locations):
+    loc = (normalize_file(finding["file"]), normalize_line(finding["line"]))
+    if loc in multi_locations:
+        return loc + (normalize_text(finding["title"]),)
+    return loc
+
+
+def finding_fields(finding):
+    return {
+        "id": finding["id"],
+        "severity": finding["severity"],
+        "file": finding["file"],
+        "line": normalize_line(finding["line"]),
+        "title": finding["title"],
+    }
+
+
+def agreed_entry(finding_a, finding_b):
+    entry = {
+        "id_a": finding_a["id"],
+        "id_b": finding_b["id"],
+        "severity_a": finding_a["severity"],
+        "severity_b": finding_b["severity"],
+        "file": finding_a["file"],
+        "line": normalize_line(finding_a["line"]),
+        "title": finding_a["title"],
+    }
+    return entry
+
+
+def write_text_0600(path, text):
+    directory = os.path.dirname(os.path.abspath(path)) or "."
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(prefix=".tmp.", suffix=".out", dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(tmp_path, 0o600)
+        os.replace(tmp_path, path)
+        os.chmod(path, 0o600)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+def compare(findings_a, findings_b):
+    multi = multi_title_locations(findings_a) | multi_title_locations(findings_b)
+    keyed_a = {}
+    keyed_b = {}
+    for finding in findings_a:
+        key = match_key(finding, multi)
+        if key in keyed_a:
+            die(f"duplicate match key in summary_a: {key!r}")
+        keyed_a[key] = finding
+    for finding in findings_b:
+        key = match_key(finding, multi)
+        if key in keyed_b:
+            die(f"duplicate match key in summary_b: {key!r}")
+        keyed_b[key] = finding
+
+    agreed = []
+    only_a = []
+    only_b = []
+    for key, finding_a in keyed_a.items():
+        finding_b = keyed_b.get(key)
+        if finding_b is None:
+            only_a.append(finding_fields(finding_a))
+        else:
+            agreed.append(agreed_entry(finding_a, finding_b))
+    for key, finding_b in keyed_b.items():
+        if key not in keyed_a:
+            only_b.append(finding_fields(finding_b))
+
+    return {
+        "agreed": agreed,
+        "only_a": only_a,
+        "only_b": only_b,
+        "totals": {
+            "agreed": len(agreed),
+            "only_a": len(only_a),
+            "only_b": len(only_b),
+        },
+    }
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        description="Compare two pro-review summary JSON files."
+    )
+    ap.add_argument("summary_a")
+    ap.add_argument("summary_b")
+    ap.add_argument("--out")
+    args = ap.parse_args()
+
+    findings_a = load_summary(args.summary_a)
+    findings_b = load_summary(args.summary_b)
+    for finding in findings_a:
+        validate_finding(finding, args.summary_a)
+    for finding in findings_b:
+        validate_finding(finding, args.summary_b)
+
+    result = compare(findings_a, findings_b)
+    payload = json.dumps(result, ensure_ascii=False, indent=2) + "\n"
+    if args.out:
+        write_text_0600(args.out, payload)
+    print(payload, end="")
+
+
+if __name__ == "__main__":
+    main()
