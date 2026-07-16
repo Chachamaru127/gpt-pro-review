@@ -133,3 +133,19 @@ fixture では検証済み。以下は実 ChatGPT でのみ確認できる live 
 - reply path: none
 - report bundle: none
 - unresolved: none for UI selection; this smoke intentionally did not send a review prompt.
+
+## Latest smoke: Path A full loop self-review with --packet-file (2026-07-16 JST)
+
+- repo: `/Users/tachibanashuuta/LocalWork/Code/gpt-pro-review`
+- project: `gpt-pro-review-self`
+- run_id: `1784180097618-b20fda`
+- command: `PRO_REVIEW_FORCE_SCAN=1 ALLOW_SECRETS=1 pro-review-run --pro --repo . --project gpt-pro-review-self --packet-file <curated 115KB> --web-search off --deep-research off --timeout 540`
+- login setup: marker present; doctor all OK (nodriver_version 0.50.3 / run_count 表示あり)
+- secret scan: 1 回目は curated packet を fail-closed で停止（`127.0.0.1:0` の IPv4 誤検知）。中身確認のうえ `ALLOW_SECRETS=1` で再実行（`[danger]` 行出力を確認）
+- result: 送信 attached / 生成 473s / `copy clicked via=copy-turn-action-button intercepted=yes` / reply via copy button
+- reply path: `~/.pro-review/inbox/gpt-pro-review-self/REPLY-1784180097618-b20fda.md`
+- report bundle: `~/.pro-review/reports/gpt-pro-review-self/1784180097618-b20fda/`（request/reply/summary/easy-report/metadata）
+- summary: findings 11 件（高9/中2）、安定 ID 付与、summarize 分類 対応8/要確認3
+- ledger: `pro-review-ledger append` 11 件追記、`stats` で rounds=1 / observed_runs=1 / proxy 注記表示を確認
+- finish closed exposure: yes, active project cleared
+- unresolved: `metadata.json` の `conversation_url` が `https://chatgpt.com/`（root）のまま保存された。送信確認直後は URL が `/c/<id>` に遷移しておらず、11.6 の取得タイミングが早すぎる。GPT 指摘 f-a8fe112e71f3 と一致。11.7 の re-open はこの URL では会話に戻れないため修正が必要

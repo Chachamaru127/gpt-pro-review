@@ -128,7 +128,7 @@ ChatGPT Web / Developer Mode / MCP の実利用制約と競合調査を踏まえ
 
 | Task | 内容 | DoD | Depends | Status |
 |------|------|-----|---------|--------|
-| 5.1 | [lane:fast][tdd:skip:manual-e2e] Path A 手動実走: 実際の Chrome で ChatGPT Pro 開く → browser-embed のプロンプトを貼って送信 → 完了待ち → DOM 抽出して save-reply → watch auto-resume → finish | reports/<project>/ にレビュー結果が永続化。1 周動作の手動 checklist が記録される | 4.1 | cc:TODO |
+| 5.1 | [lane:fast][tdd:skip:manual-e2e] Path A 手動実走: 実際の Chrome で ChatGPT Pro 開く → browser-embed のプロンプトを貼って送信 → 完了待ち → DOM 抽出して save-reply → watch auto-resume → finish | reports/<project>/ にレビュー結果が永続化。1 周動作の手動 checklist が記録される | 4.1 | cc:完了（2026-07-16 live 1 周: run 1784180097618-b20fda、--packet-file 経由 full loop 成功。checklist 記録済。副産物: 11.6 の URL 取得タイミング欠陥を live 検出） |
 | 5.2 | [lane:fast][tdd:skip:manual-e2e] Path B 手動実走: Thinking-High で pro-review-mcp 経由の search/fetch を呼ばせて、本文を DOM 抽出 → save-reply → finish | reports に永続化。1 周動作の手動 checklist が記録される | 4.1 | cc:TODO |
 
 ## /breezing 並列分割
