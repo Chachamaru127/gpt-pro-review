@@ -290,4 +290,108 @@ assert mod.download_guard_stem("/tmp/foo/bar-packet.md") == "bar-packet"
 PY
 assert_exit_ok "$?" "T14 conversation bottom scroll before copy"
 
+python3 - "$DRV" <<'PY'
+import importlib.machinery
+import inspect
+import sys
+
+mod = importlib.machinery.SourceFileLoader(
+    "pro_review_browser_drive_connector_ui", sys.argv[1]
+).load_module()
+label = "pro-review Tunnel connector"
+assert mod.connector_search_prefix(label) == "pro-review T"
+assert mod.connector_search_prefix("  ") == ""
+
+pill_js = mod.connector_pill_verify_js(label)
+search_js = mod.connector_search_click_js(label)
+assert "data-inline-selection-pill-cursor-target" in pill_js
+assert "dispatchClickSequence" in search_js
+assert "connector search result not found" in search_js
+
+sig = inspect.signature(mod.select_connector_mode)
+assert list(sig.parameters) == ["page", "label", "timeout"]
+
+src = open(sys.argv[1], encoding="utf-8").read()
+fn_start = src.index("async def select_connector_mode")
+fn_end = src.index("async def select_deep_research_via_slash", fn_start)
+fn_body = src[fn_start:fn_end]
+assert "select_connector_via_menu_search" in fn_body
+assert "verify_connector_pill" in fn_body
+assert "click_connector_candidate" in fn_body
+assert fn_body.index("select_connector_via_menu_search") < fn_body.index("click_connector_candidate")
+assert "fill_prompt_preserve_pill" in src
+assert "SEND_KEYS_MAX_CHARS" in src
+PY
+assert_exit_ok "$?" "T15 connector search path source contract"
+
+if command -v node >/dev/null 2>&1; then
+  JS_BUNDLE=$(python3 - "$DRV" <<'PY'
+import importlib.machinery
+import sys
+mod = importlib.machinery.SourceFileLoader(
+    "pro_review_browser_drive_connector_js", sys.argv[1]
+).load_module()
+label = "pro-review Tunnel connector"
+print(mod.connector_pill_verify_js(label))
+print(mod.connector_search_click_js(label))
+PY
+  )
+  assert_exit_ok "$?" "T16 connector JS render"
+  printf '%s\n' "$JS_BUNDLE" | node --check
+  assert_exit_ok "$?" "T16 connector JS passes node --check"
+
+  PILL_JS=$(python3 - "$DRV" <<'PY'
+import importlib.machinery
+import sys
+mod = importlib.machinery.SourceFileLoader(
+    "pro_review_browser_drive_pill_js", sys.argv[1]
+).load_module()
+print(mod.connector_pill_verify_js("pro-review Tunnel connector"))
+PY
+)
+  assert_exit_ok "$?" "T17 pill verify JS render"
+
+  # T17: pill 検証 JS は composer 内の pill マーカーと connector ラベル文字列の
+  # 両方を要求する。DOM 実行は jsdom 不要の範囲で fixture の構造と JS 条件を照合する。
+  PILL_WITH=$(cat <<'EOF'
+<div id="prompt-textarea" class="ProseMirror" contenteditable="true">
+  <span data-inline-selection-pill-cursor-target aria-hidden="true" contenteditable="false"></span>
+  <span contenteditable="false">pro-review Tunnel connector</span>
+  review this
+</div>
+EOF
+)
+  PILL_WITHOUT=$(cat <<'EOF'
+<div id="prompt-textarea" class="ProseMirror" contenteditable="true">review this</div>
+EOF
+)
+  assert_contains "$PILL_WITH" "data-inline-selection-pill-cursor-target" "T17 positive fixture has pill marker"
+  assert_contains "$PILL_WITH" "pro-review Tunnel connector" "T17 positive fixture has connector label"
+  assert_not_contains "$PILL_WITHOUT" "data-inline-selection-pill-cursor-target" "T17 negative fixture lacks pill marker"
+  assert_contains "$PILL_JS" "hasPill && hasLabel" "T17 pill verify requires pill and label"
+  PILL_EVAL=$(PILL_HTML="$PILL_WITH" node -e "
+const html = process.env.PILL_HTML || '';
+const wanted = 'pro-review tunnel connector';
+const text = html.replace(/<[^>]+>/g, ' ').replace(/\\s+/g, ' ').trim().toLowerCase();
+const hasPill = html.includes('data-inline-selection-pill-cursor-target');
+const hasLabel = text.includes(wanted);
+if (!(hasPill && hasLabel)) process.exit(2);
+" 2>/dev/null) || PILL_EVAL_RC=$?
+  assert_exit_ok "${PILL_EVAL_RC:-0}" "T17 positive fixture satisfies pill+label predicate"
+  set +e
+  PILL_HTML="$PILL_WITHOUT" node -e "
+const html = process.env.PILL_HTML || '';
+const wanted = 'pro-review tunnel connector';
+const text = html.replace(/<[^>]+>/g, ' ').replace(/\\s+/g, ' ').trim().toLowerCase();
+const hasPill = html.includes('data-inline-selection-pill-cursor-target');
+const hasLabel = text.includes(wanted);
+if (hasPill && hasLabel) process.exit(3);
+" >/dev/null 2>&1
+  NEG_RC=$?
+  set -e
+  assert_exit_ok "$NEG_RC" "T17 negative fixture fails pill+label predicate"
+else
+  _fail "T16 node required for connector JS syntax validation"
+fi
+
 echo "[test-browser-drive] PASS"

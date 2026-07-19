@@ -74,6 +74,10 @@ CONNECTOR_MENU_SELECTORS = [
     'button[aria-label*="Connectors"]',
     'button[aria-label*="Plugins"]',
 ]
+# ChatGPT 2026-07 UI: connector は + メニュー検索経由。先頭 N 文字で候補を絞る。
+CONNECTOR_SEARCH_PREFIX_LEN = 12
+CONNECTOR_SEARCH_POLL_INTERVAL_S = 0.3
+CONNECTOR_SEARCH_RESULT_TIMEOUT_S = 10.0
 
 DOM_EXCERPT_MAX_BYTES = 512 * 1024
 
@@ -710,6 +714,159 @@ async def click_tools_menu_candidate(page):
     }
 
 
+def connector_search_prefix(label):
+    cleaned = re.sub(r"\s+", " ", str(label or "")).strip()
+    if not cleaned:
+        return ""
+    return cleaned[:CONNECTOR_SEARCH_PREFIX_LEN]
+
+
+def connector_pill_verify_js(label):
+    payload = json.dumps(label)
+    return f"""
+(() => {{
+  const wanted = String({payload} || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+  if (!wanted) return {{ ok: false, reason: 'empty connector label' }};
+  const norm = (s) => String(s || '').replace(/\\s+/g, ' ').trim();
+  const selectors = {json.dumps(COMPOSER_QUERY_SELECTORS)};
+  const el = selectors.map(s => document.querySelector(s)).find(Boolean);
+  if (!el) return {{ ok: false, reason: 'composer not found', hasPill: false, hasLabel: false }};
+  const root = el.closest('.ProseMirror') || el;
+  const hasPill = Boolean(root.querySelector('[data-inline-selection-pill-cursor-target]'));
+  const text = norm(root.innerText || root.textContent || '');
+  const hasLabel = text.toLowerCase().includes(wanted);
+  return {{
+    ok: hasPill && hasLabel,
+    hasPill,
+    hasLabel,
+    length: text.length
+  }};
+}})()
+"""
+
+
+def connector_search_click_js(label):
+    payload = json.dumps(label)
+    return f"""
+(() => {{
+  const wanted = String({payload} || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+  if (!wanted) return {{ ok: false, reason: 'empty connector label' }};
+  const norm = (s) => String(s || '').replace(/\\s+/g, ' ').trim();
+  const visible = (el) => {{
+    const style = window.getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return style.display !== 'none' && style.visibility !== 'hidden' &&
+      rect.width > 0 && rect.height > 0;
+  }};
+  const disabled = (el) =>
+    el.disabled || el.getAttribute('aria-disabled') === 'true' ||
+    el.getAttribute('data-disabled') === 'true';
+  const composer = (el) =>
+    el.matches({json.dumps(COMPOSER_MATCH_SELECTOR)}) ||
+    Boolean(el.closest({json.dumps(COMPOSER_MATCH_SELECTOR)}));
+  const labelOf = (el) => norm([
+    el.getAttribute('aria-label'),
+    el.getAttribute('data-testid'),
+    el.getAttribute('title'),
+    el.getAttribute('role'),
+    el.textContent
+  ].filter(Boolean).join(' '));
+  function dispatchClickSequence(target) {{
+    if (!target || !(target instanceof EventTarget)) return false;
+    const types = ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'];
+    for (const type of types) {{
+      const common = {{ bubbles: true, cancelable: true, view: window }};
+      let event;
+      if (type.startsWith('pointer') && 'PointerEvent' in window) {{
+        event = new PointerEvent(type, {{ ...common, pointerId: 1, pointerType: 'mouse' }});
+      }} else {{
+        event = new MouseEvent(type, common);
+      }}
+      target.dispatchEvent(event);
+    }}
+    return true;
+  }}
+  const score = (label) => {{
+    const lower = label.toLowerCase();
+    if (lower === wanted) return 100;
+    if (lower.includes(wanted)) return 90;
+    if (wanted.includes(lower) && lower.length >= 8) return 60;
+    return 0;
+  }};
+  const elements = [
+    ...document.querySelectorAll({json.dumps(MENU_SCAN_CONNECTOR_CANDIDATE)})
+  ];
+  const matches = elements
+    .map((el, index) => ({{
+      el,
+      index,
+      label: labelOf(el),
+      target: el.closest({json.dumps(MENU_TARGET_CONNECTOR)}) || el
+    }}))
+    .map((item) => ({{ ...item, score: score(item.label) }}))
+    .filter((item) => item.score > 0 && visible(item.el) && visible(item.target) && !disabled(item.target))
+    .filter((item) => !composer(item.el) && !composer(item.target))
+    .sort((a, b) => b.score - a.score || a.index - b.index);
+  for (const item of matches) {{
+    try {{
+      dispatchClickSequence(item.target);
+      return {{ ok: true, label: item.label.slice(0, 160) }};
+    }} catch (_) {{
+      continue;
+    }}
+  }}
+  return {{ ok: false, reason: 'connector search result not found' }};
+}})()
+"""
+
+
+async def verify_connector_pill(page, label):
+    result = await js(page, connector_pill_verify_js(label))
+    return js_object(result) or {
+        "ok": False,
+        "reason": f"invalid pill verify result ({type(result).__name__})",
+    }
+
+
+async def click_connector_search_result(page, label):
+    result = await js(page, connector_search_click_js(label))
+    return js_object(result) or {
+        "ok": False,
+        "reason": f"invalid search click result ({type(result).__name__})",
+    }
+
+
+async def select_connector_via_menu_search(page, label, editor, timeout):
+    prefix = connector_search_prefix(label)
+    if not prefix:
+        return False, "search=empty connector label"
+    opened = await click_connector_menu_candidate(page)
+    if not opened.get("ok"):
+        return False, f"search-menu={opened.get('reason', 'not found')}"
+    await page.sleep(0.3)
+    try:
+        await editor.click()
+        await editor.send_keys(prefix)
+    except Exception as exc:
+        return False, f"search-keys={exc}"
+    deadline = time.time() + min(timeout, CONNECTOR_SEARCH_RESULT_TIMEOUT_S)
+    last_reason = "connector search result not found"
+    while time.time() < deadline:
+        clicked = await click_connector_search_result(page, label)
+        if clicked.get("ok"):
+            await page.sleep(0.5)
+            verified = await verify_connector_pill(page, label)
+            if verified.get("ok"):
+                return True, f"search:{prefix}->{clicked.get('label', label)}"
+            return False, (
+                "search-pill-missing:"
+                f"pill={verified.get('hasPill')},label={verified.get('hasLabel')}"
+            )
+        last_reason = clicked.get("reason", last_reason)
+        await page.sleep(CONNECTOR_SEARCH_POLL_INTERVAL_S)
+    return False, f"search={last_reason}"
+
+
 async def is_connector_selected(page, label):
     payload = json.dumps(label)
     script = f"""
@@ -883,9 +1040,23 @@ async def click_connector_menu_candidate(page):
 async def select_connector_mode(page, label, timeout):
     deadline = time.time() + timeout
     attempts = []
+    pill = await verify_connector_pill(page, label)
+    if pill.get("ok"):
+        return True, f"already-pill:{label}"
     selected = await is_connector_selected(page, label)
     if selected.get("ok"):
         return True, f"already-selected:{selected.get('label', label)}"
+    _, editor = await wait_for_chat_input(page, min(timeout, 10))
+    search_timeout = min(timeout, CONNECTOR_SEARCH_RESULT_TIMEOUT_S)
+    if editor:
+        ok, detail = await select_connector_via_menu_search(
+            page, label, editor, search_timeout
+        )
+        if ok:
+            return True, detail
+        attempts.append(detail)
+    else:
+        attempts.append("search=composer not found")
     first = await click_connector_candidate(page, label)
     if first.get("ok"):
         await page.sleep(0.5)
@@ -1025,6 +1196,24 @@ async def fill_prompt(page, request_text):
 }})()
 """
     return await js(page, script)
+
+
+async def fill_prompt_preserve_pill(page, editor, request_text):
+    """connector pill を壊さず send_keys で追記する。"""
+    if len(request_text) > SEND_KEYS_MAX_CHARS:
+        return False, f"request too large for send_keys ({len(request_text)}>{SEND_KEYS_MAX_CHARS})"
+    baseline = js_object(await js(page, PROMPT_LENGTH_JS)) or {}
+    base_len = int(baseline.get("length") or 0)
+    try:
+        await editor.click()
+        await editor.send_keys(request_text)
+    except Exception as exc:
+        return False, f"send_keys failed: {exc}"
+    verify = js_object(await js(page, PROMPT_LENGTH_JS)) or {}
+    new_len = int(verify.get("length") or 0)
+    if new_len <= base_len:
+        return False, f"no prompt increment (base={base_len}, now={new_len})"
+    return True, f"appended:{base_len}->{new_len}"
 
 
 async def wait_send_enabled(page, timeout):
@@ -1913,6 +2102,7 @@ async def drive_live(args):
         # 8.2: packet はファイル添付を主経路にする。98KB を入力欄に直書きしない。
         # 添付できたら入力欄には短い指示文だけ入れる。添付不可なら直書きにフォールバック。
         attached = False
+        connector_mode = args.mode == "connector"
         if not args.no_attach and args.request_file:
             ok_attach, detail = await attach_request_file(page, args.request_file)
             if ok_attach:
@@ -1921,37 +2111,53 @@ async def drive_live(args):
                 instruction = compose_attach_instruction(
                     request_text, args.run_id, os.path.basename(args.request_file)
                 )
-                res = js_object(await fill_prompt(page, instruction)) or {}
-                if not res.get("ok"):
-                    await editor.click()
-                    await editor.send_keys(instruction)
-                verify = js_object(await js(page, PROMPT_LENGTH_JS)) or {}
-                if int(verify.get("length") or 0) < 8:
-                    sys.stderr.write(
-                        "[pro-review-browser-drive] attach instruction not confirmed in composer; "
-                        "retrying send_keys\n"
+                if connector_mode:
+                    ok_write, write_detail = await fill_prompt_preserve_pill(
+                        page, editor, instruction
                     )
-                    await editor.click()
-                    await editor.send_keys(instruction)
+                    if not ok_write:
+                        return await afallback(
+                            f"connector attach instruction failed: {write_detail}"
+                        )
+                else:
+                    res = js_object(await fill_prompt(page, instruction)) or {}
+                    if not res.get("ok"):
+                        await editor.click()
+                        await editor.send_keys(instruction)
+                    verify = js_object(await js(page, PROMPT_LENGTH_JS)) or {}
+                    if int(verify.get("length") or 0) < 8:
+                        sys.stderr.write(
+                            "[pro-review-browser-drive] attach instruction not confirmed in composer; "
+                            "retrying send_keys\n"
+                        )
+                        await editor.click()
+                        await editor.send_keys(instruction)
             else:
                 sys.stderr.write(
                     f"[pro-review-browser-drive] attach failed ({detail}); "
                     "falling back to inline paste\n"
                 )
         if not attached:
-            # フォールバック: 直書き。fill_prompt の返り値は環境差で生 dict にならない
-            # ことがあるため js_object で正規化する。注入が成功しているのに send_keys に
-            # 落ちて 98KB を1文字ずつ打つのを避ける。
-            result = js_object(await fill_prompt(page, request_text))
-            if not (result and result.get("ok")):
-                verify = js_object(await js(page, PROMPT_LENGTH_JS)) or {}
-                filled = int(verify.get("length") or 0)
-                if filled < min(len(request_text), 64):
-                    if len(request_text) <= SEND_KEYS_MAX_CHARS:
-                        await editor.click()
-                        await editor.send_keys(request_text)
-                    else:
-                        return await afallback("prompt injection failed (request too large to type)")
+            if connector_mode:
+                ok_write, write_detail = await fill_prompt_preserve_pill(
+                    page, editor, request_text
+                )
+                if not ok_write:
+                    return await afallback(f"connector prompt append failed: {write_detail}")
+            else:
+                # フォールバック: 直書き。fill_prompt の返り値は環境差で生 dict にならない
+                # ことがあるため js_object で正規化する。注入が成功しているのに send_keys に
+                # 落ちて 98KB を1文字ずつ打つのを避ける。
+                result = js_object(await fill_prompt(page, request_text))
+                if not (result and result.get("ok")):
+                    verify = js_object(await js(page, PROMPT_LENGTH_JS)) or {}
+                    filled = int(verify.get("length") or 0)
+                    if filled < min(len(request_text), 64):
+                        if len(request_text) <= SEND_KEYS_MAX_CHARS:
+                            await editor.click()
+                            await editor.send_keys(request_text)
+                        else:
+                            return await afallback("prompt injection failed (request too large to type)")
         ready, ready_reason = await wait_send_enabled(page, min(args.timeout, 60))
         if not ready:
             state = await read_browser_state(page)
