@@ -40,11 +40,27 @@ def collect_selector_entries(module):
     return entries
 
 
+def js_scalar(raw):
+    """evaluate の返り値を素の Python 値に正規化する。
+
+    nodriver は式によって素の値と RemoteObject の両方を返す
+    （RemoteObject(value=False) は truthy になるため直接の真偽評価は不可）。
+    """
+    if isinstance(raw, (bool, int, float, str, list, dict)):
+        return raw
+    value = getattr(raw, "value", None)
+    if value is not None:
+        return value
+    return getattr(getattr(raw, "deep_serialized_value", None), "value", None)
+
+
 def build_selector_check_js(entries):
     payload = [[name, sel] for name, sel in entries]
+    # 返り値は JSON 文字列に固定する。配列を直接返すと RemoteObject 化して
+    # 復元経路が環境依存になるため。
     return f"""(() => {{
   const items = {json.dumps(payload)};
-  return items.map(([name, sel]) => {{
+  return JSON.stringify(items.map(([name, sel]) => {{
     let found = false;
     try {{
       found = document.querySelector(sel) !== null;
@@ -52,7 +68,7 @@ def build_selector_check_js(entries):
       found = false;
     }}
     return {{ name, found }};
-  }});
+  }}));
 }})()"""
 
 
@@ -131,12 +147,12 @@ async def check_live(module, entries):
         page = await browser.get("https://chatgpt.com/")
         await page.sleep(2)
 
-        login_present = await module.js(
+        login_present = js_scalar(await module.js(
             page,
             'document.querySelector(\'[data-testid="login-button"], '
             'button[data-testid="login-button"]\') !== null',
-        )
-        if login_present:
+        ))
+        if login_present is True:
             manual(
                 "ChatGPT login required; run pro-review-browser-setup --open-login"
             )
@@ -144,8 +160,13 @@ async def check_live(module, entries):
             return 0
 
         js_expr = build_selector_check_js(entries)
-        raw = await module.js(page, js_expr)
-        parsed = module.js_object(raw)
+        raw = js_scalar(await module.js(page, js_expr))
+        parsed = None
+        if isinstance(raw, str):
+            try:
+                parsed = json.loads(raw)
+            except json.JSONDecodeError:
+                parsed = None
         if not isinstance(parsed, list):
             manual("selector evaluation failed; page may not have loaded")
             print_checklist(len(entries), 0, entries, "evaluation failed")
