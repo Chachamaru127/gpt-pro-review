@@ -40,6 +40,16 @@ assert mod.validate_conversation_url(None) is None
 PY
 assert_exit_ok "$?" "T1 validate_conversation_url unit"
 
+python3 - "$DRV" <<'PY'
+import importlib.machinery
+import sys
+mod = importlib.machinery.SourceFileLoader("prr_convurl_is", sys.argv[1]).load_module()
+assert mod.is_conversation_url("https://chatgpt.com/c/abc123") is True
+assert mod.is_conversation_url("https://chatgpt.com/") is False
+assert mod.is_conversation_url("https://evil.example.com/c/x") is False
+PY
+assert_exit_ok "$?" "T1b is_conversation_url unit"
+
 python3 - "$DRV" "$RID" "$GOOD_URL" <<'PY'
 import importlib.machinery
 import sys
@@ -94,5 +104,21 @@ assert mod.persist_conversation_url(run_id, "https://evil.example.com/x") is Non
 assert mod.load_persisted_conversation_url(run_id) is None
 PY
 assert_exit_ok "$?" "T7 persist rejects invalid host without writing"
+
+python3 - "$DRV" "$RID" "$CONV_FILE" <<'PY'
+import importlib.machinery
+import os
+import sys
+mod = importlib.machinery.SourceFileLoader("prr_convurl_root", sys.argv[1]).load_module()
+run_id = sys.argv[2]
+conv_file = sys.argv[3]
+root = "https://chatgpt.com/"
+assert mod.is_conversation_url(root) is False
+if mod.is_conversation_url(root):
+    mod.persist_conversation_url(run_id, root)
+assert mod.load_persisted_conversation_url(run_id) is None
+assert not os.path.isfile(conv_file)
+PY
+assert_exit_ok "$?" "T8 root url not persisted when not a conversation link"
 
 echo "[test-conversation-url] PASS"

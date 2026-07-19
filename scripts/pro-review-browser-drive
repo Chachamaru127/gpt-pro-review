@@ -307,6 +307,18 @@ def validate_conversation_url(url):
     return candidate
 
 
+def is_conversation_url(url):
+    """Return True when url is a validated chatgpt.com /c/ conversation link."""
+    validated = validate_conversation_url(url)
+    if validated is None:
+        return False
+    try:
+        parsed = urlparse(validated)
+    except ValueError:
+        return False
+    return (parsed.path or "").startswith("/c/")
+
+
 def conversation_url_outbox_path(run_id):
     return os.path.join(
         os.path.expanduser("~/.pro-review/outbox"),
@@ -529,6 +541,17 @@ async def js(page, expression):
 async def current_page_url(page):
     href = await js(page, "window.location.href")
     return str(href).strip() if href else ""
+
+
+async def wait_conversation_url(page, timeout_s):
+    """Poll page URL until a /c/ conversation link appears or timeout."""
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        page_url = await current_page_url(page)
+        if is_conversation_url(page_url):
+            return page_url
+        await page.sleep(1.0)
+    return None
 
 
 def js_object(result):
@@ -1941,9 +1964,14 @@ async def drive_live(args):
             state = await read_browser_state(page)
             sys.stderr.write(f"[pro-review-browser-drive] send not confirmed: {sent_reason}\n")
             return await afallback(f"send not confirmed: {sent_reason}", state)
-        page_url = await current_page_url(page)
-        if persist_conversation_url(args.run_id, page_url):
-            sys.stderr.write(f"[pro-review-browser-drive] conversation url saved: {page_url}\n")
+        saved_url = None
+        page_url = await wait_conversation_url(page, 20)
+        if page_url:
+            saved_url = persist_conversation_url(args.run_id, page_url)
+            if saved_url:
+                sys.stderr.write(
+                    f"[pro-review-browser-drive] conversation url saved: {page_url}\n"
+                )
         if args.send_only:
             print("sent: connector" if args.mode == "connector" else "sent: direct")
             if args.mode == "connector":
@@ -1954,6 +1982,14 @@ async def drive_live(args):
         )
         if reply is None:
             return await afallback(reason, state)
+        if not saved_url:
+            page_url = await current_page_url(page)
+            if is_conversation_url(page_url):
+                saved_url = persist_conversation_url(args.run_id, page_url)
+                if saved_url:
+                    sys.stderr.write(
+                        f"[pro-review-browser-drive] conversation url saved: {page_url}\n"
+                    )
         print(reply)
         return 0
     except Exception as exc:
