@@ -40,20 +40,23 @@ ChatGPT Thinking-High (nodriver操作, 開発者モード, Connector=Tunnel)
 1. **tunnel-client を入手**
    - https://platform.openai.com/settings/organization/tunnels からバイナリをDL
    - `~/.pro-review/bin/tunnel-client` に置いて `chmod +x`
-2. **認証情報を発行して 0600 で保存**
-   - 同ページで `tunnel_id` を作成
-   - Runtime API keys で key を作成（権限: Tunnels = Read + Use）
+2. **tunnel を作成（workspace 関連付けが必須）**
+   - 同ページの Create tunnel で作成。このとき **ChatGPT workspaces に、使う ChatGPT アカウントの workspace を必ず追加**する（2026-07 実測: 関連付けが無い tunnel は ChatGPT 側のトンネル一覧に一切表示されない）
+   - Organizations は API key を発行する org と一致させる。key の org と tunnel の org が違うと tunnel-client が `401 mismatched_organization` になる
+3. **認証情報を発行して 0600 で保存**
+   - Runtime API keys で key を作成（権限: Tunnels = Read + Use。**tunnel と同じ org で発行**）
    - `~/.pro-review/env.sh` に保存（**`source` ではなく KEY=VALUE 形式で parse される**）：
      ```bash
      CONTROL_PLANE_TUNNEL_ID=tunnel_xxx
      CONTROL_PLANE_API_KEY=sk-proj-xxx
      ```
      必ず `chmod 600 ~/.pro-review/env.sh`
-3. **ChatGPT 側で登録**
-   - ChatGPT Web 版で **開発者モード** ON（設定 → アプリ → 詳細設定 → Developer Mode）
-   - コネクタを追加 → **Tunnel モード** → 同じ `tunnel_id` を登録
-   - Authentication は **No / Mixed** どちらでも可（最小権限なので無認証で OK）
-   - connector の表示名は既定で `pro-review Tunnel connector` にする。違う名前にする場合は実行時に `--connector-label` を指定する。
+4. **ChatGPT 側で登録（2026-07 UI）**
+   - **開発者モード** ON: 設定 → **セキュリティとログイン** → 開発者モード（旧: アプリ → 詳細設定）
+   - **先に `pro-review-tunnel` を起動して接続状態にしておく**（ChatGPT はプラグイン作成時に MCP へ疎通検証する。未接続だと `424` で「Something went wrong」になる）
+   - chatgpt.com/plugins → 右上 **+** → 新規プラグイン → 接続で **トンネル** → 一覧から tunnel を選択
+   - 認証は **認証なし / 両方** どちらでも可（最小権限なので無認証で OK）
+   - 名前は既定で `pro-review Tunnel connector` にする。違う名前にする場合は実行時に `--connector-label` を指定する。
 
 ## 起動と利用
 
