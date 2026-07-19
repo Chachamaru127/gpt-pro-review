@@ -129,7 +129,7 @@ ChatGPT Web / Developer Mode / MCP の実利用制約と競合調査を踏まえ
 | Task | 内容 | DoD | Depends | Status |
 |------|------|-----|---------|--------|
 | 5.1 | [lane:fast][tdd:skip:manual-e2e] Path A 手動実走: 実際の Chrome で ChatGPT Pro 開く → browser-embed のプロンプトを貼って送信 → 完了待ち → DOM 抽出して save-reply → watch auto-resume → finish | reports/<project>/ にレビュー結果が永続化。1 周動作の手動 checklist が記録される | 4.1 | cc:完了（2026-07-16 live 1 周: run 1784180097618-b20fda、--packet-file 経由 full loop 成功。checklist 記録済。副産物: 11.6 の URL 取得タイミング欠陥を live 検出） |
-| 5.2 | [lane:fast][tdd:skip:manual-e2e] Path B 手動実走: Thinking-High で pro-review-mcp 経由の search/fetch を呼ばせて、本文を DOM 抽出 → save-reply → finish | reports に永続化。1 周動作の手動 checklist が記録される | 4.1 | cc:TODO |
+| 5.2 | [lane:fast][tdd:skip:manual-e2e] Path B 手動実走: Thinking-High で pro-review-mcp 経由の search/fetch を呼ばせて、本文を DOM 抽出 → save-reply → finish | reports に永続化。1 周動作の手動 checklist が記録される | 4.1 | cc:TODO(6.18 と同じ API key 発行待ち。connector 成立後に 6.18 と同一 round で消化可) |
 
 ## /breezing 並列分割
 
@@ -241,7 +241,7 @@ ChatGPT Web / Developer Mode / MCP の実利用制約と競合調査を踏まえ
 | 6.11a | [lane:gate][tdd:required] **(R7)** MCP hardening: active-project / project / run_id を validate。search/fetch response は `file://`・絶対パス・username を返さない。`save_report` は inbox 配下の `REPLY-<run_id>.md` だけに atomic write し、symlink/traversal/hidden/oversize を拒否する | `tests/test-mcp-hardening.sh` で `../../x` 拒否、安全名のみ許可、response redaction、save_report traversal/symlink/別project/marker不一致/oversize 拒否が PASS。実測: `bash tests/run-all.sh` pass=26 fail=0 | 6.10 | cc:完了 |
 | 6.11b | [lane:gate][tdd:required] **(R8)** tool-mode / write gate: default は `search`/`fetch`/`save_report` のみ。汎用 filesystem `write`/`edit`/`bash` は公開しない。`PRO_REVIEW_FULL=1` は明示 Risk Gate + warning + tests 付き opt-in に限定する | `tests/test-full-gate.sh` で default tool list に汎用 write/edit/bash が無く、save_report は存在。`PRO_REVIEW_FULL=1` は明示 gate なし exit 非0、gate ありのみ許可。実測: `bash tests/run-all.sh` pass=26 fail=0 | 6.11a | cc:完了 |
 | 6.11c | [lane:gate][tdd:required] **(R9)** persistence/receipt permission/redaction: `~/.pro-review` を 700、inbox reply/report/receipt を 600 で作成し、`daemon.log` / metadata に `CONTROL_PLANE_API_KEY`/`sk-`/cookie/raw prompt を出さない。retention/cleanup command を docs 化 | `tests/test-persistence-redaction.sh` で perm が一致し、log/metadata に秘密値・raw token が出ない。cleanup 手順が docs にある。実測: `bash tests/run-all.sh` pass=26 fail=0 | 6.11a | cc:完了 |
-| 6.12 | [lane:fast][tdd:skip:manual-e2e] 実 ChatGPT 非 5.5Pro モードで 1 周し、search/fetch 読み込み・ChatGPT による save_report 保存・Claude summary まで確認する | 手動 checklist に実測時刻、mode、save_report result、report path、easy 報告結果、未解決点が記録される | 6.11 | cc:TODO |
+| 6.12 | [lane:fast][tdd:skip:manual-e2e] 実 ChatGPT 非 5.5Pro モードで 1 周し、search/fetch 読み込み・ChatGPT による save_report 保存・Claude summary まで確認する | 手動 checklist に実測時刻、mode、save_report result、report path、easy 報告結果、未解決点が記録される | 6.11 | cc:TODO(6.18 と同じ API key 発行待ち) |
 
 ## Stage 4: 最高 UX（導入・使い方・失敗時復旧）
 
@@ -257,7 +257,7 @@ ChatGPT Web / Developer Mode / MCP の実利用制約と競合調査を踏まえ
 | Task | 内容 | DoD | Depends | Status |
 |------|------|-----|---------|--------|
 | 6.17 | [lane:gate][tdd:skip:manual-e2e] 実 ChatGPT Pro で Path A を 1 周: ブラウザ起動→レビュー依頼→回答取得→reports 保存→Claude summary→`$easy` 報告 | `reports/<project>/` と manual checklist に request/reply/summary/easy report が保存され、ユーザーに次アクションが提示される。実測: project=`gpt-pro-review-patha-live-1782320833`, run_id=`1782320834115-915037`, bundle=`~/.pro-review/reports/gpt-pro-review-patha-live-1782320833/1782320834115-915037`, summary=`total=1`, finish で exposure close | 6.16 | cc:完了 |
-| 6.18 | [lane:gate][tdd:skip:manual-e2e] 実 ChatGPT 非 5.5Pro/Tunnel で Path B を 1 周: app/tunnel 起動→MCP 読み込み→回答取得→reports 保存→Claude summary→`$easy` 報告 | `reports/<project>/` と manual checklist に tunnel health/reply/summary/easy report が保存され、finish で露出が閉じる。現状: local tunnel は `health_http=200` で `TOOLS=search,fetch,save_report`、read-only 試験では `TOOLS=search,fetch` まで確認。どちらでも ChatGPT 側で custom app / connector 作成が `Something went wrong` になり、アプリ作成自体が未通過。露出は close 済み | 6.16 | cc:TODO(chatgpt app creation gate) |
+| 6.18 | [lane:gate][tdd:skip:manual-e2e] 実 ChatGPT 非 5.5Pro/Tunnel で Path B を 1 周: app/tunnel 起動→MCP 読み込み→回答取得→reports 保存→Claude summary→`$easy` 報告 | `reports/<project>/` と manual checklist に tunnel health/reply/summary/easy report が保存され、finish で露出が閉じる。**2026-07-19 根本原因判明**: `Something went wrong` の正体は (a) 旧 tunnel に ChatGPT workspace 関連付けが無く一覧に出ない (b) 関連付け済み新 tunnel でも client 未接続だと作成時の MCP 疎通検証が `424` で落ちる、の複合。新 tunnel `tunnel_6a5c…f30e`（立花 Personal org + Personal workspace 関連付け）作成済み・env.sh 切替済み。残り: 既存 API key が別 org のため `401 mismatched_organization` → **立花 Personal org の Runtime API key (Tunnels Read+Use) 発行が人間ステップ** | 6.16 | cc:TODO(API key 発行待ち。発行後: tunnel 起動→connector 作成→1 周) |
 | 6.19 | [lane:fast][tdd:skip:docs-only] closeout commit 用の変更一覧・テスト結果・未解決点を `HANDOFF.md` に更新する | HANDOFF が nodriver-first / API out / CH-GIFT out / next command を反映し、`git status` の未追跡が意図したものだけ。live e2e 完了後に final closeout へ更新 | 6.17, 6.18 | cc:完了(Phase 10 closeout; 6.18 gate 残) |
 
 ## Required / Recommended / Reject
@@ -469,7 +469,7 @@ Issue #1 のうち Phase 8 でスコープ外にした項目を別スライス�
 | 11.4 | composer セレクタ 5 点セットの共有定数化（browser-drive 内 11 箇所 → Python 定数 1 つから JS へ派生） | 重複定義 grep 0 件。既存 fixture 回帰 pass | - | cc:完了 [322a875] |
 | 11.5 | fallback/timeout 時に DOM 抜粋 + screenshot を `reports/<project>/<run_id>/` に保存（`--artifact-dir` 追加、明示 `os.chmod 0o600`。umask 継承に依存しない） | fixture で artifact 生成 + 600 を検証。manual-checklist に live 1 実測 | 11.4 | cc:完了 [88ae9df]（live 1 実測は manual 未実施） |
 | 11.6 | 送信成功時に会話 URL を取得し `metadata.json` に保存。保存時に host==chatgpt.com 検証 | fixture で URL 記録と非 chatgpt.com 拒否を検証 | - | cc:完了 [4daaedb] |
-| 11.7 | `pro-review-recover` の自動 re-open: 会話タブが閉じていたら metadata の URL（使用時にも host 検証）へ nodriver で遷移して extract | fixture で URL 検証 pass。manual-checklist に live 1 実測 | 11.6 | cc:完了 [8ac19ab]（live 1 実測は manual 未実施） |
+| 11.7 | `pro-review-recover` の自動 re-open: 会話タブが閉じていたら metadata の URL（使用時にも host 検証）へ nodriver で遷移して extract | fixture で URL 検証 pass。manual-checklist に live 1 実測 | 11.6 | cc:完了 [8ac19ab]（live 1 実測済 2026-07-19: run 1784442561233-f1a620 で reopen → copy intercept → recovered。11.6 修正 [408b139] と併せて checklist 記録） |
 
 ## Phase 12: multi-round review protocol + findings ledger（差別化の本丸）
 
@@ -485,7 +485,7 @@ Issue #1 のうち Phase 8 でスコープ外にした項目を別スライス�
 | Task | 内容 | DoD | Depends | Status |
 |------|------|-----|---------|--------|
 | 13.1 | consensus 比較ユーティリティ: 2 つの findings JSON を突き合わせ agreed / disputed の `consensus.json` を出す。**GPR は他 agent を起動しない**（第二レビュー取得は呼び出し元） | fixture で agree/dispute/片側欠落を検証 | 12.2 | cc:完了 [7158d2f]（2026-07-15 /goal「やれること全部」を optional 着手判断として実行） |
-| 13.2 | doctor `--selector-check`（opt-in）: chatgpt.com へ read-only 到達しセレクタ一致状況を報告。既定 OFF | opt-in でのみ動作。manual-checklist 形式で記録 | 11.4, spec Open Decision の承認 | cc:TODO |
+| 13.2 | doctor `--selector-check`（opt-in）: chatgpt.com へ read-only 到達しセレクタ一致状況を報告。既定 OFF | opt-in でのみ動作。manual-checklist 形式で記録 | 11.4, spec Open Decision の承認 | cc:完了 [5e01b8d]（承認 2026-07-19。live 実測 9/15 found、主セレクタ全一致。副産物: nodriver evaluate の RemoteObject bool 誤判定を live 検出し修正 [2416221]） |
 | 13.3 | 実行回数の観測カウンタ（表示のみ、強制なし）を doctor / ledger 集計に追加 | fixture で計数検証。cap/pacing は実装しない | 12.3 | cc:完了 [1f60423]（同上） |
 
 ## Phase 11-13 Reject 記録（2026-07-12）
