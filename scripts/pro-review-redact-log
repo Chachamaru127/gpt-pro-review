@@ -4,7 +4,7 @@ import re
 import sys
 
 PATTERNS = [
-    (re.compile(r"(CONTROL_PLANE_API_KEY\s*=\s*)[^\s]+"), r"\1<REDACTED>"),
+    (re.compile(r"(CONTROL_PLANE_API_KEY(?:_[A-Z0-9]+)?\s*=\s*)[^\s]+"), r"\1<REDACTED>"),
     (re.compile(r"sk-[A-Za-z0-9_-]{8,}"), "sk-<REDACTED>"),
     (re.compile(r"(?i)((?:cookie|cookies)[^:=\n]*[:=]\s*)[^\s]+"), r"\1<REDACTED>"),
 ]

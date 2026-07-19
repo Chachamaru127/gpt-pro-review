@@ -26,6 +26,7 @@ TESTS=(
   "test-doctor.sh"
   "test-selector-check.sh"
   "test-tunnel-check.sh"
+  "test-tunnel-profile.sh"
   "test-run-entry.sh"
   "test-docs-sync.sh"
   "test-start-template.sh"

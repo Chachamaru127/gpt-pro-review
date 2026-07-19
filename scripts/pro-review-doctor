@@ -77,8 +77,28 @@ ENVF="$BASE/env.sh"
 if [ -f "$ENVF" ]; then
   PERM=$(stat -f '%Lp' "$ENVF" 2>/dev/null || echo unknown)
   [ "$PERM" = "600" ] && ok "env_file" "env.sh is 600" || need_fix "env_file" "env.sh should be 600"
-  grep -q 'CONTROL_PLANE_TUNNEL_ID=' "$ENVF" && ok "tunnel_id" "configured" || manual "tunnel_id" "missing"
-  grep -q 'CONTROL_PLANE_API_KEY=' "$ENVF" && ok "api_key" "configured" || manual "api_key" "missing"
+  if grep -qE '^(export[[:space:]]+)?CONTROL_PLANE_TUNNEL_ID=' "$ENVF"; then
+    ok "tunnel_id" "configured"
+  elif grep -qE '^(export[[:space:]]+)?CONTROL_PLANE_TUNNEL_ID_[A-Z0-9]+=' "$ENVF"; then
+    ok "tunnel_id" "configured (profile 形式)"
+  else
+    manual "tunnel_id" "missing"
+  fi
+  if grep -qE '^(export[[:space:]]+)?CONTROL_PLANE_API_KEY=' "$ENVF"; then
+    ok "api_key" "configured"
+  elif grep -qE '^(export[[:space:]]+)?CONTROL_PLANE_API_KEY_[A-Z0-9]+=' "$ENVF"; then
+    ok "api_key" "configured (profile 形式)"
+  else
+    manual "api_key" "missing"
+  fi
+  profile_line=$(grep -E '^(export[[:space:]]+)?PRO_REVIEW_TUNNEL_PROFILE=' "$ENVF" 2>/dev/null | head -1 || true)
+  if [ -n "$profile_line" ]; then
+    profile_val="${profile_line#*=}"
+    profile_val="${profile_val#export }"
+    profile_val="${profile_val%\"}"
+    profile_val="${profile_val#\"}"
+    ok "tunnel_profile" "$profile_val"
+  fi
 else
   manual "env_file" "missing; create ~/.pro-review/env.sh with tunnel id and key"
 fi

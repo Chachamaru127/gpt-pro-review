@@ -50,6 +50,16 @@ ChatGPT Thinking-High (nodriver操作, 開発者モード, Connector=Tunnel)
      CONTROL_PLANE_TUNNEL_ID=tunnel_xxx
      CONTROL_PLANE_API_KEY=sk-proj-xxx
      ```
+     複数 org / アカウントを切り替える場合（`PRO_REVIEW_TUNNEL_PROFILE` で選択）:
+     ```bash
+     PRO_REVIEW_TUNNEL_PROFILE=A
+     CONTROL_PLANE_TUNNEL_ID_A=tunnel_xxx
+     CONTROL_PLANE_API_KEY_A=sk-proj-xxx
+     CONTROL_PLANE_ORG_ID_A=org-xxx
+     CONTROL_PLANE_TUNNEL_ID_B=tunnel_yyy
+     CONTROL_PLANE_API_KEY_B=sk-proj-yyy
+     CONTROL_PLANE_ORG_ID_B=org-yyy
+     ```
      必ず `chmod 600 ~/.pro-review/env.sh`
 4. **ChatGPT 側で登録（2026-07 UI）**
    - **開発者モード** ON: 設定 → **セキュリティとログイン** → 開発者モード（旧: アプリ → 詳細設定）

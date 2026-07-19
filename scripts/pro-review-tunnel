@@ -10,21 +10,148 @@ export PATH="$HOME/.pro-review/bin:$PATH"
 export HEALTH_LISTEN_ADDR="${HEALTH_LISTEN_ADDR:-127.0.0.1:0}"
 export HEALTH_URL_FILE="${HEALTH_URL_FILE:-$HOME/.pro-review/health.url}"
 
+_strip_env_value() {
+  local v="$1"
+  v="${v%\"}"
+  v="${v#\"}"
+  printf '%s' "$v"
+}
+
+_env_key_from_line() {
+  local line="$1"
+  line="${line#export }"
+  printf '%s' "${line%%=*}"
+}
+
+_env_val_from_line() {
+  local line="$1"
+  line="${line#export }"
+  _strip_env_value "${line#*=}"
+}
+
+_profile_suffix_valid() {
+  case "$1" in
+    ''|*[!A-Z0-9]*) return 1;;
+    *) return 0;;
+  esac
+}
+
+_resolved_auth_profile="default"
+_resolved_tunnel_id=""
+_resolved_org_header="no"
+
+_report_tunnel_auth() {
+  local tid_prefix="${_resolved_tunnel_id:0:12}"
+  echo "[tunnel] profile=${_resolved_auth_profile} tunnel_id=${tid_prefix}… org_header=${_resolved_org_header}" >&2
+}
+
+_extra_headers_has_org() {
+  case "${1:-}" in
+    *OpenAI-Organization*) return 0;;
+    *) return 1;;
+  esac
+}
+
 # 認証情報を取り込む。source せず KEY=VALUE だけ parse（env.sh 改ざんでの任意コマンド実行を防ぐ）
+_file_tunnel_profile=""
+_file_tunnel_id=""
+_file_api_key=""
+_file_extra_headers=""
+_profile_cache=""
 ENVF="$HOME/.pro-review/env.sh"
 if [ -f "$ENVF" ]; then
   owner=$(stat -f '%u' "$ENVF" 2>/dev/null || stat -c '%u' "$ENVF" 2>/dev/null)
   [ "$owner" = "$(id -u)" ] || { echo "[error] $ENVF の所有者が不正" >&2; exit 1; }
   perm=$(stat -f '%Lp' "$ENVF" 2>/dev/null || stat -c '%a' "$ENVF" 2>/dev/null)
   [ "$perm" = "600" ] || { echo "[warn] $ENVF を 0600 に修正" >&2; chmod 600 "$ENVF"; }
-  while IFS= read -r line; do
+  _profile_cache=$(mktemp "${TMPDIR:-/tmp}/pro-review-tunnel-profile.XXXXXX")
+  while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in
-      export\ CONTROL_PLANE_TUNNEL_ID=*|CONTROL_PLANE_TUNNEL_ID=*)
-        v="${line#*=}"; v="${v%\"}"; v="${v#\"}"; export CONTROL_PLANE_TUNNEL_ID="$v" ;;
-      export\ CONTROL_PLANE_API_KEY=*|CONTROL_PLANE_API_KEY=*)
-        v="${line#*=}"; v="${v%\"}"; v="${v#\"}"; export CONTROL_PLANE_API_KEY="$v" ;;
+      ''|\#*) continue ;;
+    esac
+    key=$(_env_key_from_line "$line")
+    val=$(_env_val_from_line "$line")
+    case "$key" in
+      PRO_REVIEW_TUNNEL_PROFILE)
+        [ -z "${PRO_REVIEW_TUNNEL_PROFILE:-}" ] && _file_tunnel_profile="$val"
+        ;;
+      CONTROL_PLANE_TUNNEL_ID)
+        _file_tunnel_id="$val"
+        ;;
+      CONTROL_PLANE_API_KEY)
+        _file_api_key="$val"
+        ;;
+      CONTROL_PLANE_EXTRA_HEADERS)
+        [ -z "${CONTROL_PLANE_EXTRA_HEADERS:-}" ] && _file_extra_headers="$val"
+        ;;
+      CONTROL_PLANE_TUNNEL_ID_*)
+        suffix="${key#CONTROL_PLANE_TUNNEL_ID_}"
+        if _profile_suffix_valid "$suffix"; then
+          printf 'TUNNEL_ID\t%s\t%s\n' "$suffix" "$val" >> "$_profile_cache"
+        fi
+        ;;
+      CONTROL_PLANE_API_KEY_*)
+        suffix="${key#CONTROL_PLANE_API_KEY_}"
+        if _profile_suffix_valid "$suffix"; then
+          printf 'API_KEY\t%s\t%s\n' "$suffix" "$val" >> "$_profile_cache"
+        fi
+        ;;
+      CONTROL_PLANE_ORG_ID_*)
+        suffix="${key#CONTROL_PLANE_ORG_ID_}"
+        if _profile_suffix_valid "$suffix"; then
+          printf 'ORG_ID\t%s\t%s\n' "$suffix" "$val" >> "$_profile_cache"
+        fi
+        ;;
     esac
   done < "$ENVF"
+fi
+
+_auth_profile="${PRO_REVIEW_TUNNEL_PROFILE:-${_file_tunnel_profile:-}}"
+_profile_tunnel_id=""
+_profile_api_key=""
+_profile_org_id=""
+if [ -n "$_auth_profile" ] && [ -n "${_profile_cache:-}" ] && [ -s "$_profile_cache" ]; then
+  while IFS=$'\t' read -r kind suffix val; do
+    [ "$suffix" = "$_auth_profile" ] || continue
+    case "$kind" in
+      TUNNEL_ID) _profile_tunnel_id="$val" ;;
+      API_KEY) _profile_api_key="$val" ;;
+      ORG_ID) _profile_org_id="$val" ;;
+    esac
+  done < "$_profile_cache"
+fi
+[ -n "${_profile_cache:-}" ] && rm -f "$_profile_cache"
+
+if [ -n "$_auth_profile" ] && { [ -n "$_profile_tunnel_id" ] || [ -n "$_profile_api_key" ]; }; then
+  _resolved_auth_profile="$_auth_profile"
+  [ -n "$_profile_tunnel_id" ] && export CONTROL_PLANE_TUNNEL_ID="$_profile_tunnel_id" && _resolved_tunnel_id="$_profile_tunnel_id"
+  [ -n "$_profile_api_key" ] && export CONTROL_PLANE_API_KEY="$_profile_api_key"
+  if [ -z "${CONTROL_PLANE_EXTRA_HEADERS:-}" ]; then
+    if [ -n "$_profile_org_id" ]; then
+      export CONTROL_PLANE_EXTRA_HEADERS="OpenAI-Organization: $_profile_org_id"
+      _resolved_org_header="yes"
+    elif [ -n "$_file_extra_headers" ]; then
+      export CONTROL_PLANE_EXTRA_HEADERS="$_file_extra_headers"
+      _extra_headers_has_org "$_file_extra_headers" && _resolved_org_header="yes"
+    fi
+  else
+    _extra_headers_has_org "${CONTROL_PLANE_EXTRA_HEADERS}" && _resolved_org_header="yes"
+  fi
+else
+  [ -n "$_file_tunnel_id" ] && export CONTROL_PLANE_TUNNEL_ID="$_file_tunnel_id" && _resolved_tunnel_id="$_file_tunnel_id"
+  [ -n "$_file_api_key" ] && export CONTROL_PLANE_API_KEY="$_file_api_key"
+  if [ -n "${CONTROL_PLANE_EXTRA_HEADERS:-}" ]; then
+    _extra_headers_has_org "${CONTROL_PLANE_EXTRA_HEADERS}" && _resolved_org_header="yes"
+  elif [ -n "$_file_extra_headers" ]; then
+    export CONTROL_PLANE_EXTRA_HEADERS="$_file_extra_headers"
+    _extra_headers_has_org "$_file_extra_headers" && _resolved_org_header="yes"
+  fi
+fi
+
+_report_tunnel_auth
+
+if [ "${PRO_REVIEW_TUNNEL_DRY_RUN:-}" = "1" ]; then
+  exit 0
 fi
 
 if ! command -v tunnel-client >/dev/null 2>&1; then

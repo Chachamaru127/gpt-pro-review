@@ -50,4 +50,14 @@ assert_contains "$CONTENT" "<REDACTED>" "T3 redaction marker present"
 LOG_MODE=$(stat -f '%Lp' "$LOG")
 assert_eq "600" "$LOG_MODE" "T3 daemon log mode 600"
 
+RAW_SUFFIX='CONTROL_PLANE_API_KEY_A=sk-proj-suffixsuffixsuffix Cookie: sessionid=suffix_cookie'
+LOG_SUFFIX="$HOME/.pro-review/daemon-test-suffix-$$.log"
+trap 'cleanup_paths "$INBOX" "$REPORTS" "$HOME/.pro-review/daemon-test-$$.log" "$LOG_SUFFIX"' EXIT
+printf '%s\n' "$RAW_SUFFIX" | "$RED" > "$LOG_SUFFIX"
+chmod 600 "$LOG_SUFFIX"
+SUFFIX_CONTENT=$(cat "$LOG_SUFFIX")
+assert_not_contains "$SUFFIX_CONTENT" "sk-proj-suffixsuffixsuffix" "T4 suffixed API key redacted"
+assert_not_contains "$SUFFIX_CONTENT" "suffix_cookie" "T4 suffixed cookie redacted"
+assert_contains "$SUFFIX_CONTENT" "CONTROL_PLANE_API_KEY_A=<REDACTED>" "T4 suffixed key marker present"
+
 echo "[test-persistence-redaction] PASS"
