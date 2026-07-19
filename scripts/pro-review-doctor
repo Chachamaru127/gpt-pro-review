@@ -2,6 +2,11 @@
 # Diagnose local gpt-pro-review setup without printing secrets.
 set -euo pipefail
 
+SELECTOR_CHECK=0
+for arg in "$@"; do
+  [ "$arg" = "--selector-check" ] && SELECTOR_CHECK=1
+done
+
 SK="$(cd "$(dirname "$0")" && pwd -P)"
 BASE="$HOME/.pro-review"
 STATUS=0
@@ -101,4 +106,13 @@ fi
 ok "run_count" "$RUN_COUNT runs across $PROJECT_COUNT projects (observation only)"
 
 [ "$missing" -eq 0 ] || STATUS=1
+
+if [ "$SELECTOR_CHECK" = "1" ]; then
+  SELECTOR_PY="python3"
+  if [ -x "$BROWSER_PY" ]; then
+    SELECTOR_PY="$BROWSER_PY"
+  fi
+  "$SELECTOR_PY" "$SK/pro-review-doctor-selector-check" "$SK/pro-review-browser-drive" || true
+fi
+
 exit "$STATUS"

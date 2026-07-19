@@ -24,6 +24,7 @@ TESTS=(
   "test-report-bundle.sh"
   "test-conversation-url.sh"
   "test-doctor.sh"
+  "test-selector-check.sh"
   "test-tunnel-check.sh"
   "test-run-entry.sh"
   "test-docs-sync.sh"
