@@ -133,6 +133,6 @@ grok（Web/X）+ Claude WebSearch のクロス調査で、A 系（agent → Chat
 
 - nodriver の DOM selector は実機で再ピンする必要がある。
 - 統合入口の最終コマンド名は `pro-review-run --pro/--thinking` を第一候補とする。
-- Path B（Plans.md 6.18、ChatGPT 側 app creation gate 未通過）を「解決する」か「明示凍結して Path A 専念」かをユーザーが決める。新フェーズは全て Path A のみで成立する。
+- Path B（Plans.md 6.18、ChatGPT 側 app creation gate 未通過）: ユーザー承認（2026-07-19）により「解決を試行する」を選択。app 作成の再試行結果は manual-checklist に記録する。
 - ToS / BAN スタンスの文書化は Non-Goal「BAN risk 評価」と衝突するため、書くならユーザーの明示判断（法務 Risk Gate）が先。
-- doctor への selector drift probe（chatgpt.com へ read-only 到達）は doctor の脅威モデルを「純ローカル」から変えるため、opt-in フラグ化を含めてユーザー判断待ち。
+- doctor への selector drift probe（chatgpt.com へ read-only 到達）: ユーザー承認（2026-07-19）。opt-in フラグ `doctor --selector-check` として実装する（既定 OFF、read-only 厳守）。Plans.md 13.2。
