@@ -182,3 +182,42 @@ fixture では検証済み。以下は実 ChatGPT でのみ確認できる live 
   5. env.sh の tunnel_id を新 ID へ切替 → tunnel-client が `401 tunnel_active_organization_required` → org ヘッダ付与で `401 mismatched_organization` → **既存 API key が別 org 所属と確定**
 - 残る人間ステップ: 立花 Personal org で Runtime API key（Tunnels Read+Use）を発行し `~/.pro-review/env.sh` の `CONTROL_PLANE_API_KEY` を差し替え（600 維持）
 - 発行後の再開手順: `pro-review-tunnel` 起動 → 🟢 確認 → chatgpt.com/plugins で connector 作成（1 分）→ `pro-review-run --thinking` で 5.2/6.12/6.18 を 1 周
+
+## Path B live 1 周成立: 5.2 / 6.12 / 6.18 消化 (2026-08-03 JST)
+
+- date: 2026-08-03 13:05-14:35 JST
+- project: `gpt-pro-review-pathb-live-1785731556` / run_id: `1785731556780-bab56d`
+- command: `pro-review-run --thinking --repo <tests/ 除外コピー> --project ... --question "scripts/pro-review-browser-drive と scripts/pro-review-connector-run を中心に bug と security を見て" --connector-label "pro-review"`
+- モデル: GPT-5.6 Sol + 思考レベル「高い」（Work surface の思考レベル submenu から選択。選択は draft 単位）
+- レビュー対象: tests/ を除いた作業ツリーコピー（fixture の偽 secret 10 ファイルが final scan に当たるため。scan は有効のまま、ALLOW_SECRETS 不使用。Path A の curated packet と同じ発想）
+
+### 開通の実態（7/19 の想定と異なる点）
+
+1. **profile B（立花 Personal org key + 新 tunnel 6a5c…f30e）は control plane 認証 🟢**（7/19 の 401 は解消 = 森さん連絡と整合）。ただし **ChatGPT の tunnel 一覧には新 tunnel が出ない**（Personal workspace 関連付けは UI 上効いていない）
+2. ChatGPT 一覧に出るのは `CJ Tunnel 2 (tunnel_6a3cc454…)` と `CLI Tunnel (tunnel_6a3762…)` の 2 つ。**CLI Tunnel は 7/19 には不可視だったものが可視化されている** = 旧 org 側の workspace 関連付けが修正された
+3. インストール済み plugin `pro-review`（plugin_asdk_app_6a3cd810…、接続時間 2026-06-25）は **CLI Tunnel 紐付き**。`PRO_REVIEW_TUNNEL_PROFILE=A` で tunnel-client を起動した途端に MCP 疎通（dispatcher forwarded 37 commands）
+4. つまり正解の組合せ = **既存 plugin × CLI Tunnel × profile A**。新 tunnel/新 plugin の作成は不要だった
+
+### live 検出した欠陥（browser-drive 自動経路）
+
+- `@メンション` fallback（attempt 3）は composer に pill を挿入するが **tools をチャットに束縛しない**。2 回実測とも `STOP_REASON=connector_unavailable`（ChatGPT 自身が返答）。summary の 高 f-3aeedaeca716（`selected()` 部分一致 + pill 再検証欠如）と同根
+- 送信成立経路は「plugin 詳細ページ → チャットで試す → pill 確認 → 依頼文挿入 → 送信」（今回は手動介助。自動化は findings 対応後に）
+- 前提整備: `~/.config/tunnel-client/pro-review.yaml` に旧 tunnel_id が固定残存 → backup 後 wrapper 再 init で解消
+
+### 結果
+
+- MCP: search/fetch 37 コマンド転送、`save_report` 14:33 着弾（inbox 保存 + marker 検証 pass）
+- watch → finish 完走: report bundle `~/.pro-review/reports/gpt-pro-review-pathb-live-1785731556/1785731556780-bab56d/`、summary json/md 生成、露出クローズ（デーモン停止 + active-project 解除）確認
+- summary: findings 6 件（高2 / 中4）全て「対応」分類、安定 ID 付き
+- 運用注意: 旧 connector-run の watch timeout 時 cleanup（trap）が生存 tunnel を pkill するため、round 途中の watch 差し替えは trap を踏まない `kill -9` で行った（summary 中 f-15ea0d59d190 / f-03342d6c74c1 の指摘と同根の設計課題）
+
+### unresolved / next round 候補（summary 参照）
+
+1. connector 選択の完全一致判定 + 全成功経路で pill 再検証（高 f-3aeedaeca716）
+2. Path B 全体の singleton lock + PID 所有権管理（高 f-03342d6c74c1）
+3. watch timeout 分岐の stale reply 再採用停止（中 f-15ea0d59d190）
+4. `--run-id` の共通検証（中 f-8761ebf09886）
+5. DONE marker 契約のブラウザ側/永続化側統一（中 f-c41df76b8ab9）
+6. recover の reopen 先行（中 f-7a531ec97d5a）
+7. 新 tunnel 6a5c… の ChatGPT 可視化は未解決（現運用は CLI Tunnel + profile A で成立）
+8. tests の SIGPIPE flake: `printf '%s\n' "$OUT" | awk '/…/{print $2; exit}'` パターンで awk 先抜け時に exit 141（2026-08-03 に test-run-id / test-packet-file / test-browser-embed で再現。ケース自体は全 ok。live round とは無関係の既存 flake）

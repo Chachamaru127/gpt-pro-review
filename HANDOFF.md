@@ -34,8 +34,8 @@ Phase 10（Cursor + Oracle sync + browser state）完了。fixture/docs gate `pa
 
 ## 未完了 gate
 
-- 6.18: Path B ChatGPT app creation / live e2e
-- 9.2: `--packet-file` curated packet
+- なし（2026-08-03: 6.18 Path B live 1 周成立で全 gate 消化。9.2 は 12.1 `--packet-file` で close 済み）
+- 次 round 候補は `docs/manual-checklist.md` 2026-08-03 節の unresolved 6 件（connector 選択の完全一致判定ほか）
 
 ## 最短コマンド
 
