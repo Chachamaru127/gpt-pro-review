@@ -49,8 +49,8 @@ assert_not_contains "$CONTENT" "# コードレビュー依頼" "T1 no auto-rebui
 PROJECT="pkt-t2-$$"
 OUT=$("$EMBED" "$REPO" "$PROJECT" --packet-file "$CURATED" --no-clip)
 assert_exit_ok "$?" "T2 embed exit 0"
-REQ=$(printf '%s\n' "$OUT" | awk '/^request_file:/{print $2; exit}')
-RUN_ID=$(printf '%s\n' "$OUT" | awk '/^run_id:/{print $2; exit}')
+REQ=$(awk '/^request_file:/{print $2; exit}' <<<"$OUT")
+RUN_ID=$(awk '/^run_id:/{print $2; exit}' <<<"$OUT")
 CONTENT=$(cat "$REQ")
 assert_contains "$CONTENT" "Curated review packet" "T2 embed uses curated packet"
 assert_contains "$CONTENT" "[[DONE-$RUN_ID]]" "T2 embed DONE marker"
@@ -91,7 +91,7 @@ EOF
 PROJECT="pkt-t5-$$"
 OUT=$("$RUN" --pro --repo "$REPO" --project "$PROJECT" --packet-file "$CURATED" --fixture-html "$FIXTURE")
 assert_exit_ok "$?" "T5 run --pro exit 0"
-REQ=$(printf '%s\n' "$OUT" | awk '/^request_file:/{print $2; exit}')
+REQ=$(awk '/^request_file:/{print $2; exit}' <<<"$OUT")
 CONTENT=$(cat "$REQ")
 assert_contains "$CONTENT" "Curated review packet" "T5 run --pro uses curated packet"
 assert_contains "$CONTENT" "[[DONE-" "T5 run --pro DONE marker"
@@ -102,7 +102,7 @@ cleanup_paths "$HOME/.pro-review/inbox/$PROJECT" "$HOME/.pro-review/reports/$PRO
 PROJECT="pkt-t6-$$"
 OUT=$("$EMBED" "$REPO" "$PROJECT" --question "legacy path" --no-clip)
 assert_exit_ok "$?" "T6 legacy embed exit 0"
-REQ=$(printf '%s\n' "$OUT" | awk '/^request_file:/{print $2; exit}')
+REQ=$(awk '/^request_file:/{print $2; exit}' <<<"$OUT")
 CONTENT=$(cat "$REQ")
 assert_contains "$CONTENT" "LEGACY_TOKEN" "T6 legacy path embeds repo changes"
 assert_contains "$CONTENT" "# コードレビュー依頼" "T6 legacy path rebuilds packet"

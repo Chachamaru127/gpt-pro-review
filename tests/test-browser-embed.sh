@@ -28,11 +28,11 @@ OUT=$("$CMD" "$REPO" "$PROJECT" --question "find bugs" --no-clip)
 RC=$?
 assert_exit_ok "$RC" "T1 exit 0"
 
-SINCE=$(printf '%s\n' "$OUT" | awk '/^since:/{print $2; exit}')
-RUN_ID=$(printf '%s\n' "$OUT" | awk '/^run_id:/{print $2; exit}')
-REQ=$(printf '%s\n'   "$OUT" | awk '/^request_file:/{print $2; exit}')
-INBOX_LINE=$(printf '%s\n' "$OUT" | awk '/^inbox:/{print $2; exit}')
-PNAME=$(printf '%s\n'   "$OUT" | awk '/^project_name:/{print $2; exit}')
+SINCE=$(awk '/^since:/{print $2; exit}' <<<"$OUT")
+RUN_ID=$(awk '/^run_id:/{print $2; exit}' <<<"$OUT")
+REQ=$(awk '/^request_file:/{print $2; exit}' <<<"$OUT")
+INBOX_LINE=$(awk '/^inbox:/{print $2; exit}' <<<"$OUT")
+PNAME=$(awk '/^project_name:/{print $2; exit}' <<<"$OUT")
 
 assert_eq "$PROJECT" "$PNAME" "T1 project_name echo"
 [ -n "$SINCE" ] || _fail "T1 since empty"
@@ -59,8 +59,8 @@ REPO=$(mkrepo)
 PROJECT="brem-t2-$$"
 OUT=$("$CMD" "$REPO" "$PROJECT" --github-branch main --question "Q" --no-clip)
 assert_exit_ok "$?" "T2 exit 0"
-REQ=$(printf '%s\n' "$OUT" | awk '/^request_file:/{print $2; exit}')
-RUN_ID=$(printf '%s\n' "$OUT" | awk '/^run_id:/{print $2; exit}')
+REQ=$(awk '/^request_file:/{print $2; exit}' <<<"$OUT")
+RUN_ID=$(awk '/^run_id:/{print $2; exit}' <<<"$OUT")
 CONTENT=$(cat "$REQ")
 assert_contains "$CONTENT" "GitHub" "T2 GH 指示文"
 assert_contains "$CONTENT" "main"   "T2 branch名"
@@ -94,7 +94,7 @@ REPO=$(mkrepo)
 (cd "$REPO" && python3 -c "import sys; sys.stdout.write('X' * 100000)" > big.txt)
 PROJECT="brem-t4-$$"
 OUT=$("$CMD" "$REPO" "$PROJECT" --question "Q" --no-clip)
-REQ=$(printf '%s\n' "$OUT" | awk '/^request_file:/{print $2; exit}')
+REQ=$(awk '/^request_file:/{print $2; exit}' <<<"$OUT")
 CONTENT=$(cat "$REQ")
 # truncated 注意書きが入っているか、もしくは big.txt が省略されているか
 assert_contains "$CONTENT" "省略" "T4 truncated 旗 or 省略表示"
@@ -117,7 +117,7 @@ REPO=$(mkrepo)
 PROJECT="brem-t6-$$"
 OUT=$("$CMD" "$REPO" "$PROJECT" --question "Q" --web-search off --deep-research on --no-clip)
 assert_exit_ok "$?" "T6 explicit tool policy exit"
-REQ=$(printf '%s\n' "$OUT" | awk '/^request_file:/{print $2; exit}')
+REQ=$(awk '/^request_file:/{print $2; exit}' <<<"$OUT")
 CONTENT=$(cat "$REQ")
 assert_contains "$OUT" "web_search: off" "T6 machine web search policy"
 assert_contains "$OUT" "deep_research: on" "T6 machine deep research policy"

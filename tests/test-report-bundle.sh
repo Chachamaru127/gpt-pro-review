@@ -31,7 +31,7 @@ printf '[高] app.py:1 — 問題\n推奨修正: 直す\n[[DONE-%s]]\n' "$RID" |
 REPLY="$INBOX/REPLY-$RID.md"
 F_OUT=$(PRO_REVIEW_REPORT_MODE=path-a PRO_REVIEW_REPORT_SINCE=1700000000123 "$FI" "$PROJECT" "$REPLY" 2>&1)
 assert_exit_ok "$?" "T1 finish exit"
-BUNDLE=$(printf '%s\n' "$F_OUT" | awk '/^report_bundle:/{print $2; exit}')
+BUNDLE=$(awk '/^report_bundle:/{print $2; exit}' <<<"$F_OUT")
 [ -n "$BUNDLE" ] || _fail "T1 report_bundle missing"
 assert_file_exists "$BUNDLE/reply.md" "T1 bundle reply"
 assert_file_exists "$BUNDLE/request.md" "T1 bundle request"

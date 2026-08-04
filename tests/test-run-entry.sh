@@ -28,7 +28,7 @@ OUT=$("$RUN" --pro --repo "$REPO" --project "$PROJ" --question "find bugs" --fix
 assert_exit_ok "$?" "T1 --pro exit"
 assert_contains "$OUT" "report_saved:" "T1 --pro report saved"
 assert_contains "$OUT" "run_id:" "T1 --pro run id"
-REQ=$(printf '%s\n' "$OUT" | awk '/^request_file:/{print $2; exit}')
+REQ=$(awk '/^request_file:/{print $2; exit}' <<<"$OUT")
 assert_contains "$(cat "$REQ")" 'web_search: `off`' "T1 --pro web search forwarded"
 assert_contains "$(cat "$REQ")" 'deep_research: `on`' "T1 --pro deep research forwarded"
 
@@ -47,7 +47,7 @@ assert_exit_ok "$?" "T2 --thinking exit"
 assert_contains "$OUT2" "sent: connector" "T2 thinking nodriver connector send"
 assert_contains "$OUT2" "REPLY:" "T2 thinking watch reply"
 assert_contains "$OUT2" "report_bundle:" "T2 thinking finish bundle"
-REQ2=$(printf '%s\n' "$OUT2" | awk '/^request_file:/{print $2; exit}')
+REQ2=$(awk '/^request_file:/{print $2; exit}' <<<"$OUT2")
 assert_contains "$(cat "$REQ2")" "save_report" "T2 thinking request save_report"
 assert_contains "$(cat "$REQ2")" "Tunnel connector" "T2 thinking request connector gate"
 assert_contains "$(cat "$REQ2")" "STOP_REASON=connector_unavailable" "T2 thinking request connector stop"

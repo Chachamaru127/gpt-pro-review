@@ -67,7 +67,7 @@ printf '[高] app.py:1 — 問題\n推奨修正: 直す\n[[DONE-%s]]\n' "$RID" |
 REPLY="$INBOX/REPLY-$RID.md"
 F_OUT=$(PRO_REVIEW_REPORT_MODE=path-a PRO_REVIEW_REPORT_SINCE=1700000000123 "$FI" "$PROJECT" "$REPLY" 2>&1)
 assert_exit_ok "$?" "T3 finish with valid conversation url"
-BUNDLE=$(printf '%s\n' "$F_OUT" | awk '/^report_bundle:/{print $2; exit}')
+BUNDLE=$(awk '/^report_bundle:/{print $2; exit}' <<<"$F_OUT")
 [ -n "$BUNDLE" ] || _fail "T3 report_bundle missing"
 META=$(cat "$BUNDLE/metadata.json")
 assert_contains "$META" '"conversation_url": "https://chatgpt.com/c/abc123-def456"' "T3 metadata records chatgpt.com url"
@@ -75,7 +75,7 @@ assert_contains "$META" '"conversation_url": "https://chatgpt.com/c/abc123-def45
 printf 'https://evil.example.com/c/bad\n' > "$CONV_FILE"
 F_OUT2=$(PRO_REVIEW_REPORT_MODE=path-a PRO_REVIEW_REPORT_SINCE=1700000000123 "$FI" "$PROJECT" "$REPLY" 2>&1)
 assert_exit_ok "$?" "T4 finish rejects evil host on read"
-BUNDLE2=$(printf '%s\n' "$F_OUT2" | awk '/^report_bundle:/{print $2; exit}')
+BUNDLE2=$(awk '/^report_bundle:/{print $2; exit}' <<<"$F_OUT2")
 META2=$(cat "$BUNDLE2/metadata.json")
 assert_contains "$META2" '"conversation_url": null' "T4 metadata null for evil host"
 assert_not_contains "$META2" "evil.example.com" "T4 evil url not in metadata"
@@ -83,7 +83,7 @@ assert_not_contains "$META2" "evil.example.com" "T4 evil url not in metadata"
 printf 'https://chat.openai.com/c/legacy\n' > "$CONV_FILE"
 F_OUT3=$(PRO_REVIEW_REPORT_MODE=path-a PRO_REVIEW_REPORT_SINCE=1700000000123 "$FI" "$PROJECT" "$REPLY" 2>&1)
 assert_exit_ok "$?" "T5 finish rejects chat.openai.com host"
-BUNDLE3=$(printf '%s\n' "$F_OUT3" | awk '/^report_bundle:/{print $2; exit}')
+BUNDLE3=$(awk '/^report_bundle:/{print $2; exit}' <<<"$F_OUT3")
 META3=$(cat "$BUNDLE3/metadata.json")
 assert_contains "$META3" '"conversation_url": null' "T5 metadata null for chat.openai.com"
 assert_not_contains "$META3" "chat.openai.com" "T5 legacy host not in metadata"
@@ -91,7 +91,7 @@ assert_not_contains "$META3" "chat.openai.com" "T5 legacy host not in metadata"
 rm -f "$CONV_FILE"
 F_OUT4=$(PRO_REVIEW_REPORT_MODE=path-a PRO_REVIEW_REPORT_SINCE=1700000000123 "$FI" "$PROJECT" "$REPLY" 2>&1)
 assert_exit_ok "$?" "T6 finish without staging file"
-BUNDLE4=$(printf '%s\n' "$F_OUT4" | awk '/^report_bundle:/{print $2; exit}')
+BUNDLE4=$(awk '/^report_bundle:/{print $2; exit}' <<<"$F_OUT4")
 META4=$(cat "$BUNDLE4/metadata.json")
 assert_contains "$META4" '"conversation_url": null' "T6 metadata null when staging missing"
 

@@ -68,7 +68,7 @@ OUT=$("$RUN" --pro --repo "$REPO" --project "$PROJECT" --followup "$PREV_RUN_ID"
 assert_exit_ok "$?" "T1 followup run exit 0"
 assert_contains "$OUT" "report_bundle:" "T1 report bundle saved"
 
-REQ=$(printf '%s\n' "$OUT" | awk '/^request_file:/{print $2; exit}')
+REQ=$(awk '/^request_file:/{print $2; exit}' <<<"$OUT")
 [ -n "$REQ" ] || _fail "T1 request_file missing"
 CONTENT=$(cat "$REQ")
 assert_contains "$CONTENT" "Follow-up review" "T1 followup header"
@@ -82,12 +82,12 @@ assert_contains "$CONTENT" '```diff' "T1 diff block"
 assert_contains "$CONTENT" "followup fix" "T1 repo diff included"
 assert_contains "$CONTENT" "[[DONE-" "T1 DONE marker injected"
 
-BUNDLE=$(printf '%s\n' "$OUT" | awk '/^report_bundle:/{print $2; exit}')
+BUNDLE=$(awk '/^report_bundle:/{print $2; exit}' <<<"$OUT")
 assert_file_exists "$BUNDLE/metadata.json" "T1 bundle metadata"
 META=$(cat "$BUNDLE/metadata.json")
 assert_contains "$META" "\"previous_run_id\": \"$PREV_RUN_ID\"" "T1 metadata previous_run_id"
 
-NEW_RUN_ID=$(printf '%s\n' "$OUT" | awk '/^run_id:/{print $2; exit}')
+NEW_RUN_ID=$(awk '/^run_id:/{print $2; exit}' <<<"$OUT")
 VERDICT_REPLY="$TMP/verdict-reply.md"
 cat > "$VERDICT_REPLY" <<EOF
 Follow-up verdicts:
@@ -143,7 +143,7 @@ REPLY="$HOME/.pro-review/inbox/$PROJECT/REPLY-$FINISH_RID.md"
 F_OUT=$(PRO_REVIEW_REPORT_MODE=path-a PRO_REVIEW_REPORT_SINCE=1700000000999 \
   PRO_REVIEW_PREVIOUS_RUN_ID="$PREV_RUN_ID" "$FI" "$PROJECT" "$REPLY" 2>&1)
 assert_exit_ok "$?" "T4 finish exit"
-FBUNDLE=$(printf '%s\n' "$F_OUT" | awk '/^report_bundle:/{print $2; exit}')
+FBUNDLE=$(awk '/^report_bundle:/{print $2; exit}' <<<"$F_OUT")
 assert_contains "$(cat "$FBUNDLE/metadata.json")" "\"previous_run_id\": \"$PREV_RUN_ID\"" "T4 finish metadata previous_run_id"
 
 set +e

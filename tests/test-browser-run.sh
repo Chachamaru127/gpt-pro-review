@@ -56,13 +56,13 @@ assert_exit_ok "$?" "T2 browser-run success"
 assert_contains "$OUT" "saved:" "T2 save-reply ran"
 assert_contains "$OUT" "REPLY:" "T2 watch ran"
 assert_contains "$OUT" "report_saved:" "T2 finish ran"
-REPORT=$(printf '%s\n' "$OUT" | awk '/^report_saved:/{print $2; exit}')
+REPORT=$(awk '/^report_saved:/{print $2; exit}' <<<"$OUT")
 assert_file_exists "$REPORT" "T2 report exists"
-REQ=$(printf '%s\n' "$OUT" | awk '/^request_file:/{print $2; exit}')
+REQ=$(awk '/^request_file:/{print $2; exit}' <<<"$OUT")
 assert_contains "$(cat "$REQ")" 'web_search: `on`' "T2 request web search on"
 assert_contains "$(cat "$REQ")" 'deep_research: `off`' "T2 request deep research off"
 
-RUN_ID=$(printf '%s\n' "$OUT" | awk '/^run_id:/{print $2; exit}')
+RUN_ID=$(awk '/^run_id:/{print $2; exit}' <<<"$OUT")
 assert_contains "$(cat "$REPORT")" "[[DONE-$RUN_ID]]" "T2 report marker"
 
 # T3: 大きな embed(>64KB) で printf|awk パースが SIGPIPE(141) で落ちない回帰。
@@ -77,7 +77,7 @@ BIG_RC=$?
 set -e
 assert_exit_ok "$BIG_RC" "T3 large embed parses without SIGPIPE (was exit 141)"
 assert_contains "$BIG_OUT" "report_saved:" "T3 large embed completes end-to-end"
-BIG_RUN_ID=$(printf '%s\n' "$BIG_OUT" | awk '/^run_id:/{print $2; exit}')
+BIG_RUN_ID=$(awk '/^run_id:/{print $2; exit}' <<<"$BIG_OUT")
 assert_contains "$BIG_OUT" "run_id: $BIG_RUN_ID" "T3 run_id parsed from large embed"
 cleanup_paths "$BIGREPO" "$HOME/.pro-review/inbox/$BIGPROJ" "$HOME/.pro-review/reports/$BIGPROJ" "$HOME/.pro-review/workspace/$BIGPROJ"
 

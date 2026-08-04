@@ -26,10 +26,10 @@ PROJECT="iA-$$"
 OUT=$("$BE" "$REPO" "$PROJECT" --question "find the bug" --no-clip)
 RC=$?
 assert_exit_ok "$RC" "S1 browser-embed exit 0"
-SINCE=$(printf '%s\n' "$OUT" | awk '/^since:/{print $2; exit}')
-RUN_ID=$(printf '%s\n' "$OUT" | awk '/^run_id:/{print $2; exit}')
-INBOX=$(printf '%s\n'   "$OUT" | awk '/^inbox:/{print $2; exit}')
-REQ=$(printf '%s\n'     "$OUT" | awk '/^request_file:/{print $2; exit}')
+SINCE=$(awk '/^since:/{print $2; exit}' <<<"$OUT")
+RUN_ID=$(awk '/^run_id:/{print $2; exit}' <<<"$OUT")
+INBOX=$(awk '/^inbox:/{print $2; exit}' <<<"$OUT")
+REQ=$(awk '/^request_file:/{print $2; exit}' <<<"$OUT")
 [ -n "$SINCE" ] && [ -n "$RUN_ID" ] && [ -n "$INBOX" ] && [ -n "$REQ" ] || _fail "S1 machine-readable missing"
 _ok "S1 since=$SINCE run_id=$RUN_ID inbox=$INBOX"
 

@@ -33,7 +33,7 @@ assert_eq "600" "$REPLY_MODE" "T1 reply mode 600"
 
 F_OUT=$("$FI" "$PROJECT" "$REPLY" 2>&1)
 assert_exit_ok "$?" "T2 finish exit 0"
-REPORT=$(printf '%s\n' "$F_OUT" | awk '/^report_saved:/{print $2; exit}')
+REPORT=$(awk '/^report_saved:/{print $2; exit}' <<<"$F_OUT")
 assert_file_exists "$REPORT" "T2 report exists"
 REPORT_MODE=$(stat -f '%Lp' "$REPORT")
 assert_eq "600" "$REPORT_MODE" "T2 report mode 600"

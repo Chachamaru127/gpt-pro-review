@@ -25,9 +25,9 @@ REPO=$(mkrepo)
 PROJECT="iB-$$"
 OUT=$("$ST" "$REPO" "$PROJECT" --mode review --question "are there bugs?")
 assert_exit_ok "$?" "S1 start exit 0"
-SINCE=$(printf '%s\n' "$OUT" | awk '/^since:/{print $2; exit}')
-RUN_ID=$(printf '%s\n' "$OUT" | awk '/^run_id:/{print $2; exit}')
-INBOX=$(printf '%s\n'   "$OUT" | awk '/^inbox:/{print $2; exit}')
+SINCE=$(awk '/^since:/{print $2; exit}' <<<"$OUT")
+RUN_ID=$(awk '/^run_id:/{print $2; exit}' <<<"$OUT")
+INBOX=$(awk '/^inbox:/{print $2; exit}' <<<"$OUT")
 [ -n "$SINCE" ] && [ -n "$RUN_ID" ] && [ -n "$INBOX" ] || _fail "S1 machine-readable missing"
 _ok "S1 since=$SINCE run_id=$RUN_ID inbox=$INBOX"
 
