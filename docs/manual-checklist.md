@@ -221,3 +221,14 @@ fixture では検証済み。以下は実 ChatGPT でのみ確認できる live 
 6. recover の reopen 先行（中 f-7a531ec97d5a）
 7. 新 tunnel 6a5c… の ChatGPT 可視化は未解決（現運用は CLI Tunnel + profile A で成立）
 8. tests の SIGPIPE flake: `printf '%s\n' "$OUT" | awk '/…/{print $2; exit}'` パターンで awk 先抜け時に exit 141（2026-08-03 に test-run-id / test-packet-file / test-browser-embed で再現。ケース自体は全 ok。live round とは無関係の既存 flake）
+
+## Phase 14 消化記録: findings 6 件 + SIGPIPE flake 修正 (2026-08-04 JST)
+
+- 実装: 14.1/14.4/14.5/14.7/14.2 = Worker subagent、14.3/14.6 = Lead（Worker 停滞のため引き取り）。委譲先 codex-companion はこの repo に bin/harness が無く不使用（resolver の正式値 claude で続行）
+- 検証: `bash tests/run-all.sh` 3 連続 41/41 緑（Lead 実測 + 独立レビュアー再実測の二重確認）
+- Review Gate: fresh-context reviewer = APPROVE（DoD 7 件を実装と突き合わせ、SIGPIPE の exit 141 も実機再現で裏取り）。brain 一次 verdict = APPROVE
+- 14.6 に伴い旧 11.7 の契約テスト test-recover-reopen T2 を新契約（reopen 先行・単一 deadline）に更新
+- reviewer 指摘の次 round 候補（low 3 件、非ブロッカー）:
+  9. persist_conversation_url の TOCTOU: islink チェック後の open() が symlink に追従しうる → os.open + O_NOFOLLOW|O_EXCL 化
+  10. acquire_lock の ns 級競合窓: mkdir 成功〜pid 書込の間に stale 誤判定がありうる → pid を mktemp + rename で atomic 配置
+  11. SIGPIPE 危険パターン（printf|awk{exit}）が本番スクリプト側（browser-run:112 / recover:67 / connector-run:196 / start:37 / run:224,302）に残存（14.7 のスコープは tests のみ。現状の出力サイズでは実害なし）
