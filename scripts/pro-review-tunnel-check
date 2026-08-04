@@ -41,12 +41,25 @@ if [ ! -s "$HEALTH" ]; then
   exit 3
 fi
 HEALTH_URL="$(cat "$HEALTH")"
-if ! curl -fsS "$HEALTH_URL" >/dev/null 2>&1; then
+if ! curl -fsS "$HEALTH_URL/healthz" >/dev/null 2>&1; then
   echo "STOP_REASON=tunnel_not_running"
   echo "HEALTH_URL=$HEALTH_URL"
   echo "NEXT_ACTION=run pro-review-tunnel in background"
   exit 3
 fi
+
+READY_TIMEOUT="${PRO_REVIEW_READY_TIMEOUT:-30}"
+READY_INTERVAL="${PRO_REVIEW_READY_INTERVAL:-1}"
+READY_DEADLINE=$((SECONDS + READY_TIMEOUT))
+while ! curl -fsS "$HEALTH_URL/readyz" >/dev/null 2>&1; do
+  if [ "$SECONDS" -ge "$READY_DEADLINE" ]; then
+    echo "STOP_REASON=tunnel_not_ready"
+    echo "HEALTH_URL=$HEALTH_URL"
+    echo "NEXT_ACTION=inspect ~/.pro-review/daemon.log and verify tunnel id / API key / org header"
+    exit 3
+  fi
+  sleep "$READY_INTERVAL"
+done
 
 TOOLS=$(python3 <<EOF
 import json, subprocess, sys

@@ -277,6 +277,10 @@ assert "download flood" in src
 assert "count_download_matches" in src
 assert "intercepted" in src
 assert "pbpaste fallback" in src
+# サイドバーの「レビュー依頼停止」のような会話名を生成停止ボタンと誤認しない。
+assert "/stop generating|停止|" not in src
+assert "stop-button|stop-generation|stop-response" in src
+assert "ストリーミングを停止|停止)$" in src
 extract = src[src.index("async def extract_via_copy") : src.index("async def extract_via_dom")]
 assert extract.index("SCROLL_CONVERSATION_BOTTOM_JS") < extract.index("COPY_LAST_REPLY_JS")
 assert "await page.sleep(0.4)" in extract
@@ -300,6 +304,7 @@ mod = importlib.machinery.SourceFileLoader(
 ).load_module()
 label = "pro-review Tunnel connector"
 assert mod.connector_search_prefix(label) == "pro-review T"
+assert mod.connector_mention_query(label) == "pro-review"
 assert mod.connector_search_prefix("  ") == ""
 
 pill_js = mod.connector_pill_verify_js(label)
@@ -316,11 +321,55 @@ fn_start = src.index("async def select_connector_mode")
 fn_end = src.index("async def select_deep_research_via_slash", fn_start)
 fn_body = src[fn_start:fn_end]
 assert "select_connector_via_menu_search" in fn_body
+assert "select_connector_via_mention" in fn_body
 assert "verify_connector_pill" in fn_body
 assert "click_connector_candidate" in fn_body
-assert fn_body.index("select_connector_via_menu_search") < fn_body.index("click_connector_candidate")
+assert fn_body.index("select_connector_via_mention") < fn_body.index(
+    "select_connector_via_menu_search"
+)
+assert fn_body.index("select_connector_via_menu_search") < fn_body.index(
+    "click_connector_candidate"
+)
+assert "connector attempt" in fn_body
+assert "attempts[-4:]" not in fn_body
+search_start = src.index("async def select_connector_via_menu_search")
+search_end = src.index("async def is_connector_selected", search_start)
+search_body = src[search_start:search_end]
+assert "send_keys_to_active_page" in search_body
+assert "focus_connector_menu_search" in search_body
+assert 'if not focused.get("ok"):' in search_body
+assert 'selected_label = clicked.get("label") or label' in search_body
+assert "verify_connector_pill(page, selected_label)" in search_body
+assert "editor.click()" not in search_body
+assert "editor.send_keys(prefix)" not in search_body
+menu_start = src.index("async def click_connector_menu_candidate")
+menu_end = src.index("async def select_connector_mode", menu_start)
+menu_body = src[menu_start:menu_end]
+assert "dispatchClickSequence" in menu_body
+assert "await page.select_all" in menu_body
+assert "nodriver:work-plugin:" in menu_body
+assert "await page.select" in menu_body
+assert "await element.click_mouse()" in menu_body
+assert "el.click()" not in menu_body
+assert "async def select_chat_surface" in src
+assert "Chat surface:" in src
+connector_mode_start = src.index('if args.mode == "connector"')
+connector_mode_end = src.index('else:', connector_mode_start)
+connector_mode_body = src[connector_mode_start:connector_mode_end]
+assert connector_mode_body.index("await select_chat_surface(page)") < connector_mode_body.index(
+    "await select_connector_mode("
+)
+assert connector_mode_body.index("await clear_prompt(page)") < connector_mode_body.index(
+    "await select_connector_mode("
+)
+assert "menu_rounds < 3" in fn_body
 assert "fill_prompt_preserve_pill" in src
 assert "SEND_KEYS_MAX_CHARS" in src
+connector_failure = src[
+    src.index('if not selected:', src.index('if args.mode == "connector"'))
+    : src.index('connector selected:', src.index('if args.mode == "connector"'))
+]
+assert "await save_diagnostic_artifacts_async()" in connector_failure
 PY
 assert_exit_ok "$?" "T15 connector search path source contract"
 
@@ -393,5 +442,219 @@ if (hasPill && hasLabel) process.exit(3);
 else
   _fail "T16 node required for connector JS syntax validation"
 fi
+
+# T18 (14.1): selected() は完全一致のみ true。"unchecked" が "checked" を部分文字列に
+# 含む・"not-selected" が "selected" を部分文字列に含むケースで誤検出しないこと。
+# 全成功経路で pill 再検証(verify_connector_pill)を必須化したことも構造で確認する。
+python3 - "$DRV" <<'PY'
+import sys
+src = open(sys.argv[1], encoding="utf-8").read()
+# 旧: 部分一致 regex が selected() 側に残っていないこと(2箇所とも)
+assert "/true|checked|selected|on/" not in src
+# 新: aria-* は === 'true' のみ、data-state は許可値との完全一致のみ
+assert src.count("=== 'true'") >= 6  # aria-checked/aria-selected/aria-pressed x 2箇所
+assert "['checked', 'selected', 'on', 'active'].includes" in src
+
+fn_start = src.index("async def select_connector_mode")
+fn_end = src.index("async def select_deep_research_via_slash", fn_start)
+fn_body = src[fn_start:fn_end]
+# 全成功経路(pill検出 / already-selected / visible / menu-selected / menu-click)で
+# pill 再検証が入っていること。pill検出自体を含め計5箇所以上 verify_connector_pill を参照。
+assert fn_body.count("verify_connector_pill") >= 5
+assert "already-selected" in fn_body
+assert "visible:" in fn_body
+PY
+assert_exit_ok "$?" "T18 selected() exact match + pill reverify source contract"
+
+if command -v node >/dev/null 2>&1; then
+  # selected() の状態判定ロジックを fixture 属性値に対して評価する。
+  # el.closest は自身を返すだけで足りる(traversal は別関心事、ここでは状態判定のみ検証)。
+  SELECTED_EVAL=$(node -e "
+const selected = (attrs) => {
+  const el = { getAttribute: (k) => (k in attrs ? attrs[k] : null) };
+  const target = el;
+  const ariaChecked = target.getAttribute('aria-checked');
+  const ariaSelected = target.getAttribute('aria-selected');
+  const ariaPressed = target.getAttribute('aria-pressed');
+  const dataState = (target.getAttribute('data-state') || '').toLowerCase();
+  return ariaChecked === 'true' || ariaSelected === 'true' || ariaPressed === 'true' ||
+    ['checked', 'selected', 'on', 'active'].includes(dataState);
+};
+const cases = [
+  [{ 'data-state': 'unchecked' }, false],
+  [{ 'data-state': 'not-selected' }, false],
+  [{ 'data-state': 'checked' }, true],
+  [{ 'data-state': 'selected' }, true],
+  [{ 'data-state': 'on' }, true],
+  [{ 'data-state': 'active' }, true],
+  [{ 'aria-checked': 'true' }, true],
+  [{ 'aria-checked': 'false' }, false],
+  [{ 'aria-pressed': 'true' }, true],
+  [{}, false],
+];
+for (const [attrs, want] of cases) {
+  const got = selected(attrs);
+  if (got !== want) {
+    console.error('mismatch: ' + JSON.stringify(attrs) + ' got=' + got + ' want=' + want);
+    process.exit(1);
+  }
+}
+" 2>&1) || SELECTED_EVAL_RC=$?
+  assert_exit_ok "${SELECTED_EVAL_RC:-0}" "T18 selected() predicate: unchecked/not-selected false, checked/selected/on/active true ($SELECTED_EVAL)"
+else
+  _fail "T18 node required for selected() predicate validation"
+fi
+
+# T19 (14.4): --run-id 共通検証。path-safe [A-Za-z0-9._-]+、"."/".." 拒否、
+# 先頭 "-"/"." 拒否。CLI 経路(main 冒頭で即 exit 2)と、outbox パス生成
+# (conversation_url_outbox_path 経由の read/write 双方)の二層で拒否する。
+T19_I=0
+for BAD_RID in '../../etc/passwd' 'a/b' '.hidden' '-foo' '.' '..'; do
+  T19_I=$((T19_I + 1))
+  # マーカーを BAD_RID に合わせた fixture を都度作る。run_id 検証が抜けていると
+  # マーカーが一致して抽出成功(exit 0)してしまうため、これで真に検証ゲートを Red 化できる。
+  BAD_FIX="$TMP/badrid-$T19_I.html"
+  printf '<main><div data-message-author-role="assistant"><p>x</p><p>[[DONE-%s]]</p></div></main>\n' "$BAD_RID" > "$BAD_FIX"
+  set +e
+  # "-foo" は argparse 自体がオプション風とみなすため --run-id=BAD_RID 形式で値として渡す
+  OUT=$("$DRV" --fixture-html "$BAD_FIX" "--run-id=$BAD_RID" 2>&1)
+  RC=$?
+  set -e
+  assert_eq "2" "$RC" "T19 CLI rejects run_id '$BAD_RID'"
+  assert_contains "$OUT" "invalid run_id" "T19 CLI rejects run_id '$BAD_RID' with clear reason"
+done
+
+TMP_HOME19=$(mktemp -d -t prr-browser-drive-runid-XXXXXX)
+HOME="$TMP_HOME19" python3 - "$DRV" <<'PY'
+import importlib.machinery
+import os
+import sys
+
+mod = importlib.machinery.SourceFileLoader("pro_review_browser_drive_runid", sys.argv[1]).load_module()
+
+# write 経路: 不正 run_id は outbox パスを作らない(persist は None を返す)
+for bad in ("../../etc/passwd", "a/b", ".hidden", "-foo", ".", ".."):
+    assert mod.conversation_url_outbox_path(bad) is None, f"outbox path should reject {bad!r}"
+    assert mod.persist_conversation_url(bad, "https://chatgpt.com/c/x") is None, (
+        f"persist should reject run_id {bad!r}"
+    )
+
+# read 経路: 不正 run_id は既存ファイルの有無に関わらず None
+for bad in ("../../etc/passwd", "a/b", ".hidden", "-foo"):
+    assert mod.load_persisted_conversation_url(bad) is None, f"load should reject {bad!r}"
+    assert mod.resolve_reopen_conversation_url(bad) is None, f"resolve should reject {bad!r}"
+
+# 正常系は引き続き通る
+good = "1700000000123-runid19"
+assert mod.persist_conversation_url(good, "https://chatgpt.com/c/ok") == "https://chatgpt.com/c/ok"
+assert mod.load_persisted_conversation_url(good) == "https://chatgpt.com/c/ok"
+
+# 既存 symlink は read/write 双方拒否(先勝ちで置かれた symlink 経由の誤動作防止)
+sym_rid = "1700000000123-symlink19"
+outbox = os.path.expanduser("~/.pro-review/outbox")
+os.makedirs(outbox, exist_ok=True)
+target = os.path.join(outbox, "elsewhere.txt")
+with open(target, "w", encoding="utf-8") as f:
+    f.write("https://evil.example.com/c/x\n")
+sym_path = os.path.join(outbox, f"conversation-url-{sym_rid}")
+os.symlink(target, sym_path)
+assert mod.conversation_url_outbox_path(sym_rid) is None, "symlink outbox path must be rejected"
+assert mod.load_persisted_conversation_url(sym_rid) is None, "symlink read must be rejected"
+assert mod.persist_conversation_url(sym_rid, "https://chatgpt.com/c/y") is None, (
+    "symlink write must be rejected"
+)
+PY
+assert_exit_ok "$?" "T19 conversation_url_outbox_path read/write reject traversal + symlink"
+cleanup_paths "$TMP_HOME19"
+
+# T20 (14.5): DONE marker 契約統一。正本は pro-review-validate-reply(最終行完全一致)。
+# browser-drive の validate_reply() はバッククォート/コードフェンス囲みマーカーを
+# 正規化して返し、返り値の最終行が素の marker になること。fenced fixture が
+# browser-drive -> save-reply -> validate-reply まで一貫して通ることも確認する。
+RID20="1700000000123-marker20"
+M20="[[DONE-$RID20]]"
+NORMALIZED=$(python3 - "$DRV" "$RID20" <<'PY'
+import importlib.machinery
+import sys
+mod = importlib.machinery.SourceFileLoader("pro_review_browser_drive_marker20", sys.argv[1]).load_module()
+run_id = sys.argv[2]
+marker = f"[[DONE-{run_id}]]"
+raw = f"結論: バグなし\n```\n{marker}\n```"
+sys.stdout.write(mod.validate_reply(raw, run_id))
+PY
+)
+assert_exit_ok "$?" "T20 validate_reply normalizes fenced marker"
+LAST_LINE=$(tail -n1 <<<"$NORMALIZED")
+assert_eq "$M20" "$LAST_LINE" "T20 normalized final line equals bare marker"
+
+TMP_HOME20=$(mktemp -d -t prr-browser-drive-marker20-XXXXXX)
+SAVE="$(repo_scripts_dir)/pro-review-save-reply"
+VALIDATE="$(repo_scripts_dir)/pro-review-validate-reply"
+PROJECT20="marker20"
+SAVED_OUT=$(printf '%s' "$NORMALIZED" | HOME="$TMP_HOME20" "$SAVE" "$PROJECT20" "$RID20")
+assert_exit_ok "$?" "T20 save-reply accepts normalized reply"
+REPLY_PATH20=$(awk '/^saved:/{print $2; exit}' <<<"$SAVED_OUT")
+INBOX20="$TMP_HOME20/.pro-review/inbox/$PROJECT20"
+HOME="$TMP_HOME20" "$VALIDATE" "$INBOX20" --run-id "$RID20" "$REPLY_PATH20" --quiet
+assert_exit_ok "$?" "T20 validate-reply accepts browser-drive normalized+saved reply (fenced marker consistent end-to-end)"
+cleanup_paths "$TMP_HOME20"
+
+python3 - "$DRV" <<'PY'
+import asyncio
+import importlib.machinery
+import os
+import sys
+import tempfile
+
+mod = importlib.machinery.SourceFileLoader("pro_review_browser_drive_reopen", sys.argv[1]).load_module()
+
+os.environ["HOME"] = tempfile.mkdtemp(prefix="prr-reopen-")
+
+RID = "1700000000000-abc123"
+SAVED = "https://chatgpt.com/c/11111111-2222-3333-4444-555555555555"
+
+class FakePage:
+    def __init__(self, name):
+        self.name = name
+    async def sleep(self, _t):
+        pass
+
+class FakeBrowser:
+    def __init__(self):
+        self.gets = []
+    async def get(self, url):
+        self.gets.append(url)
+        return FakePage("reopened")
+
+calls = []
+async def fake_extract(page, run_id, timeout, request_file=None):
+    calls.append((page.name, timeout))
+    return ("body\n[[DONE-%s]]" % run_id, None, None)
+mod.extract_live_reply = fake_extract
+
+class Args:
+    run_id = RID
+    timeout = 30
+    request_file = None
+
+path = mod.conversation_url_outbox_path(RID)
+os.makedirs(os.path.dirname(path), exist_ok=True)
+with open(path, "w") as f:
+    f.write(SAVED + "\n")
+b = FakeBrowser()
+reply, reason, state = asyncio.run(mod.extract_only_flow(b, FakePage("original"), Args()))
+assert b.gets == [SAVED], b.gets
+assert len(calls) == 1 and calls[0][0] == "reopened", calls
+assert calls[0][1] <= 30, calls
+assert reply and reply.endswith("[[DONE-%s]]" % RID)
+
+os.remove(path)
+calls.clear()
+b2 = FakeBrowser()
+reply2, _r, _s = asyncio.run(mod.extract_only_flow(b2, FakePage("original"), Args()))
+assert b2.gets == [], b2.gets
+assert len(calls) == 1 and calls[0][0] == "original", calls
+PY
+assert_exit_ok "$?" "T21 extract-only reopens saved conversation URL first (single deadline)"
 
 echo "[test-browser-drive] PASS"

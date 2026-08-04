@@ -43,7 +43,7 @@ assert_exit_ok "$?" "T2 recover exit ok"
 assert_contains "$OUT" "saved:" "T2 recover saved"
 assert_contains "$OUT" "report_bundle:" "T2 recover bundle"
 assert_contains "$OUT" "[recovered]" "T2 recover done line"
-BUNDLE=$(printf '%s\n' "$OUT" | awk '/^report_bundle:/{print $2; exit}')
+BUNDLE=$(awk '/^report_bundle:/{print $2; exit}' <<<"$OUT")
 assert_file_exists "$BUNDLE/reply.md" "T2 bundle reply"
 assert_contains "$(cat "$BUNDLE/reply.md")" "[[DONE-$RID]]" "T2 bundle reply marker"
 assert_file_exists "$TMP_HOME/.pro-review/inbox/$PROJ/REPLY-$RID.md" "T2 inbox REPLY written"

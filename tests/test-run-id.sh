@@ -40,12 +40,12 @@ sed \
 chmod +x "$patched/embed-fixed-since"
 OUT1=$("$patched/embed-fixed-since" "$REPO" "$PROJECT" --question "q1" --no-clip)
 OUT2=$("$patched/embed-fixed-since" "$REPO" "$PROJECT" --question "q2" --no-clip)
-S1=$(printf '%s\n' "$OUT1" | awk '/^since:/{print $2; exit}')
-S2=$(printf '%s\n' "$OUT2" | awk '/^since:/{print $2; exit}')
-R1=$(printf '%s\n' "$OUT1" | awk '/^run_id:/{print $2; exit}')
-R2=$(printf '%s\n' "$OUT2" | awk '/^run_id:/{print $2; exit}')
-REQ1=$(printf '%s\n' "$OUT1" | awk '/^request_file:/{print $2; exit}')
-REQ2=$(printf '%s\n' "$OUT2" | awk '/^request_file:/{print $2; exit}')
+S1=$(awk '/^since:/{print $2; exit}' <<<"$OUT1")
+S2=$(awk '/^since:/{print $2; exit}' <<<"$OUT2")
+R1=$(awk '/^run_id:/{print $2; exit}' <<<"$OUT1")
+R2=$(awk '/^run_id:/{print $2; exit}' <<<"$OUT2")
+REQ1=$(awk '/^request_file:/{print $2; exit}' <<<"$OUT1")
+REQ2=$(awk '/^request_file:/{print $2; exit}' <<<"$OUT2")
 assert_eq "$FAKE_SINCE" "$S1" "T2 since1 fixed second"
 assert_eq "$FAKE_SINCE" "$S2" "T2 since2 fixed second"
 [ "$R1" != "$R2" ] || _fail "T2 run_id collision: $R1"
@@ -67,11 +67,11 @@ sed \
 chmod +x "$patched2/start-fixed-since"
 OUT1=$("$patched2/start-fixed-since" "$REPO" "$PROJECT" --mode review --question "a")
 OUT2=$("$patched2/start-fixed-since" "$REPO" "$PROJECT-b" --mode review --question "b")
-S1=$(printf '%s\n' "$OUT1" | awk '/^since:/{print $2; exit}')
-R1=$(printf '%s\n' "$OUT1" | awk '/^run_id:/{print $2; exit}')
-R2=$(printf '%s\n' "$OUT2" | awk '/^run_id:/{print $2; exit}')
-REQ1=$(printf '%s\n' "$OUT1" | awk '/^request_file:/{print $2; exit}')
-REQ2=$(printf '%s\n' "$OUT2" | awk '/^request_file:/{print $2; exit}')
+S1=$(awk '/^since:/{print $2; exit}' <<<"$OUT1")
+R1=$(awk '/^run_id:/{print $2; exit}' <<<"$OUT1")
+R2=$(awk '/^run_id:/{print $2; exit}' <<<"$OUT2")
+REQ1=$(awk '/^request_file:/{print $2; exit}' <<<"$OUT1")
+REQ2=$(awk '/^request_file:/{print $2; exit}' <<<"$OUT2")
 assert_eq "1700000099" "$S1" "T3 since fixed second"
 [ "$R1" != "$R2" ] || _fail "T3 run_id collision"
 [ "$REQ1" != "$REQ2" ] || _fail "T3 request_file collision"
@@ -127,9 +127,9 @@ REPO=$(mkrepo)
 (cd "$REPO" && echo "X" >> calc.py)
 PROJECT="rid-iA-$$"
 OUT=$("$BE" "$REPO" "$PROJECT" --question "q" --no-clip)
-SINCE=$(printf '%s\n' "$OUT" | awk '/^since:/{print $2; exit}')
-RUN_ID=$(printf '%s\n' "$OUT" | awk '/^run_id:/{print $2; exit}')
-INBOX=$(printf '%s\n' "$OUT" | awk '/^inbox:/{print $2; exit}')
+SINCE=$(awk '/^since:/{print $2; exit}' <<<"$OUT")
+RUN_ID=$(awk '/^run_id:/{print $2; exit}' <<<"$OUT")
+INBOX=$(awk '/^inbox:/{print $2; exit}' <<<"$OUT")
 FAKE=$(printf 'review\n[[DONE-%s]]' "$RUN_ID")
 printf '%s' "$FAKE" | "$SR" "$PROJECT" "$RUN_ID" >/dev/null
 REPLY="$INBOX/REPLY-$RUN_ID.md"
@@ -146,9 +146,9 @@ cleanup_paths "$REPO" "$INBOX" "$HOME/.pro-review/reports/$PROJECT"
 REPO=$(mkrepo)
 PROJECT="rid-iB-$$"
 OUT=$("$ST" "$REPO" "$PROJECT" --mode review --question "q")
-SINCE=$(printf '%s\n' "$OUT" | awk '/^since:/{print $2; exit}')
-RUN_ID=$(printf '%s\n' "$OUT" | awk '/^run_id:/{print $2; exit}')
-INBOX=$(printf '%s\n' "$OUT" | awk '/^inbox:/{print $2; exit}')
+SINCE=$(awk '/^since:/{print $2; exit}' <<<"$OUT")
+RUN_ID=$(awk '/^run_id:/{print $2; exit}' <<<"$OUT")
+INBOX=$(awk '/^inbox:/{print $2; exit}' <<<"$OUT")
 printf 'ok\n[[DONE-%s]]' "$RUN_ID" | "$SR" "$PROJECT" "$RUN_ID" >/dev/null
 REPLY="$INBOX/REPLY-$RUN_ID.md"
 assert_file_exists "$REPLY" "T6 Path B reply by run_id"

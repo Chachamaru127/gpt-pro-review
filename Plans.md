@@ -129,7 +129,7 @@ ChatGPT Web / Developer Mode / MCP の実利用制約と競合調査を踏まえ
 | Task | 内容 | DoD | Depends | Status |
 |------|------|-----|---------|--------|
 | 5.1 | [lane:fast][tdd:skip:manual-e2e] Path A 手動実走: 実際の Chrome で ChatGPT Pro 開く → browser-embed のプロンプトを貼って送信 → 完了待ち → DOM 抽出して save-reply → watch auto-resume → finish | reports/<project>/ にレビュー結果が永続化。1 周動作の手動 checklist が記録される | 4.1 | cc:完了（2026-07-16 live 1 周: run 1784180097618-b20fda、--packet-file 経由 full loop 成功。checklist 記録済。副産物: 11.6 の URL 取得タイミング欠陥を live 検出） |
-| 5.2 | [lane:fast][tdd:skip:manual-e2e] Path B 手動実走: Thinking-High で pro-review-mcp 経由の search/fetch を呼ばせて、本文を DOM 抽出 → save-reply → finish | reports に永続化。1 周動作の手動 checklist が記録される | 4.1 | cc:TODO(6.18 と同じ API key 発行待ち。connector 成立後に 6.18 と同一 round で消化可) |
+| 5.2 | [lane:fast][tdd:skip:manual-e2e] Path B 手動実走: Thinking-High で pro-review-mcp 経由の search/fetch を呼ばせて、本文を DOM 抽出 → save-reply → finish | reports に永続化。1 周動作の手動 checklist が記録される | 4.1 | cc:完了（2026-08-03 live: 6.18 と同一 round で消化。GPT-5.6 Sol 思考レベル「高い」、search/fetch 37 コマンド実測。DOM 抽出 fallback は不要＝save_report 主経路成功。checklist 2026-08-03 節） |
 
 ## /breezing 並列分割
 
@@ -241,7 +241,7 @@ ChatGPT Web / Developer Mode / MCP の実利用制約と競合調査を踏まえ
 | 6.11a | [lane:gate][tdd:required] **(R7)** MCP hardening: active-project / project / run_id を validate。search/fetch response は `file://`・絶対パス・username を返さない。`save_report` は inbox 配下の `REPLY-<run_id>.md` だけに atomic write し、symlink/traversal/hidden/oversize を拒否する | `tests/test-mcp-hardening.sh` で `../../x` 拒否、安全名のみ許可、response redaction、save_report traversal/symlink/別project/marker不一致/oversize 拒否が PASS。実測: `bash tests/run-all.sh` pass=26 fail=0 | 6.10 | cc:完了 |
 | 6.11b | [lane:gate][tdd:required] **(R8)** tool-mode / write gate: default は `search`/`fetch`/`save_report` のみ。汎用 filesystem `write`/`edit`/`bash` は公開しない。`PRO_REVIEW_FULL=1` は明示 Risk Gate + warning + tests 付き opt-in に限定する | `tests/test-full-gate.sh` で default tool list に汎用 write/edit/bash が無く、save_report は存在。`PRO_REVIEW_FULL=1` は明示 gate なし exit 非0、gate ありのみ許可。実測: `bash tests/run-all.sh` pass=26 fail=0 | 6.11a | cc:完了 |
 | 6.11c | [lane:gate][tdd:required] **(R9)** persistence/receipt permission/redaction: `~/.pro-review` を 700、inbox reply/report/receipt を 600 で作成し、`daemon.log` / metadata に `CONTROL_PLANE_API_KEY`/`sk-`/cookie/raw prompt を出さない。retention/cleanup command を docs 化 | `tests/test-persistence-redaction.sh` で perm が一致し、log/metadata に秘密値・raw token が出ない。cleanup 手順が docs にある。実測: `bash tests/run-all.sh` pass=26 fail=0 | 6.11a | cc:完了 |
-| 6.12 | [lane:fast][tdd:skip:manual-e2e] 実 ChatGPT 非 5.5Pro モードで 1 周し、search/fetch 読み込み・ChatGPT による save_report 保存・Claude summary まで確認する | 手動 checklist に実測時刻、mode、save_report result、report path、easy 報告結果、未解決点が記録される | 6.11 | cc:TODO(6.18 と同じ API key 発行待ち) |
+| 6.12 | [lane:fast][tdd:skip:manual-e2e] 実 ChatGPT 非 5.5Pro モードで 1 周し、search/fetch 読み込み・ChatGPT による save_report 保存・Claude summary まで確認する | 手動 checklist に実測時刻、mode、save_report result、report path、easy 報告結果、未解決点が記録される | 6.11 | cc:完了（2026-08-03 live: run 1785731556780-bab56d。save_report 保存・watch 検知・summary 生成（findings 6: 高2/中4）・easy 報告・checklist 記録済み） |
 
 ## Stage 4: 最高 UX（導入・使い方・失敗時復旧）
 
@@ -257,7 +257,7 @@ ChatGPT Web / Developer Mode / MCP の実利用制約と競合調査を踏まえ
 | Task | 内容 | DoD | Depends | Status |
 |------|------|-----|---------|--------|
 | 6.17 | [lane:gate][tdd:skip:manual-e2e] 実 ChatGPT Pro で Path A を 1 周: ブラウザ起動→レビュー依頼→回答取得→reports 保存→Claude summary→`$easy` 報告 | `reports/<project>/` と manual checklist に request/reply/summary/easy report が保存され、ユーザーに次アクションが提示される。実測: project=`gpt-pro-review-patha-live-1782320833`, run_id=`1782320834115-915037`, bundle=`~/.pro-review/reports/gpt-pro-review-patha-live-1782320833/1782320834115-915037`, summary=`total=1`, finish で exposure close | 6.16 | cc:完了 |
-| 6.18 | [lane:gate][tdd:skip:manual-e2e] 実 ChatGPT 非 5.5Pro/Tunnel で Path B を 1 周: app/tunnel 起動→MCP 読み込み→回答取得→reports 保存→Claude summary→`$easy` 報告 | `reports/<project>/` と manual checklist に tunnel health/reply/summary/easy report が保存され、finish で露出が閉じる。**2026-07-19 根本原因判明**: `Something went wrong` の正体は (a) 旧 tunnel に ChatGPT workspace 関連付けが無く一覧に出ない (b) 関連付け済み新 tunnel でも client 未接続だと作成時の MCP 疎通検証が `424` で落ちる、の複合。新 tunnel `tunnel_6a5c…f30e`（立花 Personal org + Personal workspace 関連付け）作成済み・env.sh 切替済み。残り: 既存 API key が別 org のため `401 mismatched_organization` → **立花 Personal org の Runtime API key (Tunnels Read+Use) 発行が人間ステップ** | 6.16 | cc:TODO(API key 発行待ち。発行後: tunnel 起動→connector 作成→1 周) |
+| 6.18 | [lane:gate][tdd:skip:manual-e2e] 実 ChatGPT 非 5.5Pro/Tunnel で Path B を 1 周: app/tunnel 起動→MCP 読み込み→回答取得→reports 保存→Claude summary→`$easy` 報告 | `reports/<project>/` と manual checklist に tunnel health/reply/summary/easy report が保存され、finish で露出が閉じる。**2026-07-19 根本原因判明**: `Something went wrong` の正体は (a) 旧 tunnel に ChatGPT workspace 関連付けが無く一覧に出ない (b) 関連付け済み新 tunnel でも client 未接続だと作成時の MCP 疎通検証が `424` で落ちる、の複合。新 tunnel `tunnel_6a5c…f30e`（立花 Personal org + Personal workspace 関連付け）作成済み・env.sh 切替済み。残り: 既存 API key が別 org のため `401 mismatched_organization` → **立花 Personal org の Runtime API key (Tunnels Read+Use) 発行が人間ステップ** | 6.16 | cc:完了（2026-08-03 live 1 周成立。正解の組合せは「既存 plugin（2026-06-25 作成）× CLI Tunnel × profile A」: 旧 org 側の修正（森さん連絡）で CLI Tunnel が ChatGPT 一覧に可視化され、既存 plugin が開通。新 tunnel 6a5c… は key B で認証可だが ChatGPT 一覧には不可視のまま。connector 選択の @メンション経路は tools を束縛しない欠陥を live 検出（summary f-3aeedaeca716 と同根）。詳細: manual-checklist 2026-08-03 節） |
 | 6.19 | [lane:fast][tdd:skip:docs-only] closeout commit 用の変更一覧・テスト結果・未解決点を `HANDOFF.md` に更新する | HANDOFF が nodriver-first / API out / CH-GIFT out / next command を反映し、`git status` の未追跡が意図したものだけ。live e2e 完了後に final closeout へ更新 | 6.17, 6.18 | cc:完了(Phase 10 closeout; 6.18 gate 残) |
 
 ## Required / Recommended / Reject
@@ -497,3 +497,17 @@ Issue #1 のうち Phase 8 でスコープ外にした項目を別スライス�
 | quota cap / pacing 強制 | Non-Goal「BAN risk 評価」と衝突。実害記録ゼロで過剰設計。観測カウンタ（13.3）に縮小 |
 | ToS / BAN スタンス文書化 | 法務 Risk Gate。ユーザー明示判断が先（spec Open Decisions） |
 | API engine / multi-model browser panel / 汎用 write / CI live browser | 既存 Non-Goals・oracle-adoptions の不採用判断を維持 |
+
+## Phase 14: Path B live findings 対応（2026-08-03 GPT レビュー高2/中4 + flake）
+
+Context: 2026-08-03 の Path B live 1 周（run 1785731556780-bab56d）で回収した findings 6 件と、同日確認した tests の SIGPIPE flake を消化する。findings 全文は `~/.pro-review/reports/gpt-pro-review-pathb-live-1785731556/20260803-143337-summary.md`。前提として前セッション WIP（connector UI 追従 + 診断 artifact、tests 込み全緑）を本 branch に取り込んでから着手する。
+
+| Task | 内容 | DoD | Depends | Status |
+|------|------|-----|---------|--------|
+| 14.1 | [lane:gate][tdd:required] **(f-3aeedaeca716 高)** connector 選択判定の完全一致化 + 全成功経路で pill 再検証: `selected()` は `aria-checked/selected/pressed==="true"` と `data-state` 許可値完全一致、`select_connector_mode()` の全経路（pill/menu/mention）でクリック後 `verify_connector_pill` 必須 | `data-state="unchecked"`/`not-selected`/mention 束縛失敗の fixture が「送信せず fallback」になる。既存回帰維持 | - | cc:完了 [01a4416] |
+| 14.2 | [lane:gate][tdd:required] **(f-03342d6c74c1 高)** Path B singleton lock + PID 所有権: connector-run が snapshot 前に atomic lock を取得し finish まで保持。busy 時は `STOP_REASON=another_run_active`。tunnel 停止は `pkill -f` でなく自 run 起動 PID のみ | 2 並列起動で後発が拒否される統合テスト PASS。lock は異常終了でも stale にならない（PID 生存確認付き） | - | cc:完了 [eb29ba3] |
+| 14.3 | [lane:gate][tdd:required] **(f-15ea0d59d190 中)** watch timeout 分岐の stale reply 再採用停止: timeout 時は close_access のみ、finish を reply 未指定で呼ばない | 「旧 reply が inbox にある状態で新 run timeout」fixture で旧 report が再生成されない | 14.2 | cc:完了 [7eccfb0] |
+| 14.4 | [lane:gate][tdd:required] **(f-8761ebf09886 中)** browser-drive `--run-id` 共通検証: `^[A-Za-z0-9._-]+$`、`.`/`..`/先頭 `-`・`.` 拒否、outbox 配下強制 + symlink 拒否 | traversal run_id の read/write 双方が拒否される fixture PASS | - | cc:完了 [9c65412] |
+| 14.5 | [lane:gate][tdd:required] **(f-c41df76b8ab9 中)** DONE marker 契約統一: browser-drive 側 `validate_reply()` を validator と同じ「最終行完全一致」に揃える（バッククォート/trailing fence は正規化して返す） | fenced marker fixture が browser-drive→save-reply→watch を一貫して通るか一貫して落ちる | - | cc:完了 [6f80553] |
+| 14.6 | [lane:fast][tdd:required] **(f-7a531ec97d5a 中)** recover の reopen 先行: `--extract-only` は保存済み会話 URL を先に開き、URL 無し時のみ現在ページ。全体で単一 deadline | 「root ページ + 保存済み URL あり」fixture で即 reopen される。timeout 二重消費なし | - | cc:完了 [7f9b718]（旧 11.7 契約テスト test-recover-reopen T2 を新契約に更新） |
+| 14.7 | [lane:fast][tdd:skip:mechanical-fix] tests SIGPIPE flake 解消: `printf '%s\n' "$OUT" \| awk '/…/{…; exit}'` の awk 先抜けパターンを全 tests で排除（awk の exit 削除 or here-string 化） | `tests/run-all.sh` 連続 3 回 PASS | - | cc:完了 [2068dc2]（run-all 3 連緑 2026-08-04 実測） |

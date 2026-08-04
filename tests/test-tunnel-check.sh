@@ -51,12 +51,18 @@ assert_exit_nonzero "$RC" "T4 no health rejected"
 assert_contains "$OUT" "STOP_REASON=tunnel_not_running" "T4 health reason"
 
 PORT_FILE="$TMP_HOME/health.port"
-python3 - "$PORT_FILE" <<'PY' &
+READY_FILE="$TMP_HOME/tunnel.ready"
+python3 - "$PORT_FILE" "$READY_FILE" <<'PY' &
 import http.server, socketserver, sys
 from pathlib import Path
 
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
+        if self.path == "/readyz" and not Path(sys.argv[2]).exists():
+            self.send_response(503)
+            self.end_headers()
+            self.wfile.write(b"not ready")
+            return
         self.send_response(200)
         self.end_headers()
         self.wfile.write(b"ok")
@@ -74,15 +80,24 @@ for _ in 1 2 3 4 5; do
 done
 [ -s "$PORT_FILE" ] || _fail "T5 health fixture did not start"
 printf 'http://127.0.0.1:%s\n' "$(cat "$PORT_FILE")" > "$TMP_HOME/.pro-review/health.url"
+
+set +e
+OUT=$(HOME="$TMP_HOME" PRO_REVIEW_READY_TIMEOUT=0 "$CHK" "$PROJECT" 2>&1)
+RC=$?
+set -e
+assert_exit_nonzero "$RC" "T5 live but not ready rejected"
+assert_contains "$OUT" "STOP_REASON=tunnel_not_ready" "T5 ready reason"
+
+touch "$READY_FILE"
 OUT=$(HOME="$TMP_HOME" "$CHK" "$PROJECT")
-assert_exit_ok "$?" "T5 lifecycle OK"
-assert_contains "$OUT" "OK tunnel_lifecycle" "T5 OK output"
-assert_contains "$OUT" "save_report" "T5 save_report available"
+assert_exit_ok "$?" "T6 lifecycle OK"
+assert_contains "$OUT" "OK tunnel_lifecycle" "T6 OK output"
+assert_contains "$OUT" "save_report" "T6 save_report available"
 
 OUT=$(HOME="$TMP_HOME" PRO_REVIEW_READONLY=1 "$CHK" "$PROJECT")
-assert_exit_ok "$?" "T6 readonly lifecycle OK"
-assert_contains "$OUT" "MODE=readonly" "T6 readonly mode"
-assert_contains "$OUT" "TOOLS=search,fetch" "T6 readonly tools"
-assert_not_contains "$OUT" "save_report" "T6 readonly hides save_report"
+assert_exit_ok "$?" "T7 readonly lifecycle OK"
+assert_contains "$OUT" "MODE=readonly" "T7 readonly mode"
+assert_contains "$OUT" "TOOLS=search,fetch" "T7 readonly tools"
+assert_not_contains "$OUT" "save_report" "T7 readonly hides save_report"
 
 echo "[test-tunnel-check] PASS"

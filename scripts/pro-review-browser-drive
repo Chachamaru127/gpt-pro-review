@@ -292,6 +292,18 @@ async def afallback(reason, state=None):
     return _emit_fallback(reason, state)
 
 
+RUN_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def validate_run_id(run_id):
+    """path-safe [A-Za-z0-9._-]+、"."/".." 拒否、先頭 "-"/"." 拒否。"""
+    if not run_id or not RUN_ID_RE.match(run_id) or run_id in (".", ".."):
+        return False
+    if run_id.startswith(("-", ".")):
+        return False
+    return True
+
+
 def validate_conversation_url(url):
     """Return url when host is exactly chatgpt.com over https; else None."""
     if not url or not isinstance(url, str):
@@ -324,10 +336,22 @@ def is_conversation_url(url):
 
 
 def conversation_url_outbox_path(run_id):
-    return os.path.join(
-        os.path.expanduser("~/.pro-review/outbox"),
-        f"conversation-url-{run_id}",
-    )
+    """Build the outbox path for run_id's staged conversation URL.
+
+    run_id は path-safe な形式でなければならない。加えて、生成したパスの
+    realpath が outbox 直下であること・既存 symlink でないことを強制する
+    (呼び出し元が CLI --run-id 検証を経由しない場合の第二防御線)。
+    """
+    if not validate_run_id(run_id):
+        return None
+    outbox = os.path.expanduser("~/.pro-review/outbox")
+    path = os.path.join(outbox, f"conversation-url-{run_id}")
+    if os.path.islink(path):
+        return None
+    outbox_real = os.path.realpath(outbox)
+    if os.path.dirname(os.path.realpath(path)) != outbox_real:
+        return None
+    return path
 
 
 def persist_conversation_url(run_id, url):
@@ -341,6 +365,12 @@ def persist_conversation_url(run_id, url):
             )
         return None
     path = conversation_url_outbox_path(run_id)
+    if path is None:
+        sys.stderr.write(
+            "[pro-review-browser-drive] conversation url outbox path rejected"
+            f" for run_id: {run_id!r}\n"
+        )
+        return None
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         f.write(validated)
@@ -356,7 +386,7 @@ def persist_conversation_url(run_id, url):
 def load_persisted_conversation_url(run_id):
     """Load staged conversation URL and re-validate host before use."""
     path = conversation_url_outbox_path(run_id)
-    if not os.path.isfile(path):
+    if not path or not os.path.isfile(path):
         return None
     try:
         with open(path, encoding="utf-8") as f:
@@ -366,10 +396,32 @@ def load_persisted_conversation_url(run_id):
     return validate_conversation_url(raw)
 
 
+async def extract_only_flow(browser, page, args, deadline=None):
+    """Recover extraction: open the persisted conversation URL first, then extract.
+
+    URL 無しのときだけ現在ページで抽出する。deadline は全体で 1 つ共有し、
+    reopen 後の抽出が指定 timeout を超えないようにする。
+    """
+    if deadline is None:
+        deadline = time.time() + args.timeout
+    reopen_url = resolve_reopen_conversation_url(args.run_id)
+    if reopen_url:
+        sys.stderr.write(
+            f"[pro-review-browser-drive] reopening conversation: {reopen_url}\n"
+        )
+        page = await browser.get(reopen_url)
+        _ARTIFACT_RUNTIME["page"] = page
+        await page.sleep(2)
+    remaining = max(1.0, deadline - time.time())
+    return await extract_live_reply(
+        page, args.run_id, remaining, request_file=args.request_file
+    )
+
+
 def resolve_reopen_conversation_url(run_id):
     """Return validated staging URL for extract-only re-open, or None."""
     path = conversation_url_outbox_path(run_id)
-    if not os.path.isfile(path):
+    if not path or not os.path.isfile(path):
         return None
     try:
         with open(path, encoding="utf-8") as f:
@@ -397,14 +449,18 @@ def connector_unavailable(label, detail=""):
 
 
 def validate_reply(text, run_id):
+    """正本は pro-review-validate-reply(最終行が marker と完全一致)。
+
+    DOM 抽出は末尾に空行やコードフェンス(```)・バッククォート囲みが付きやすい。
+    マーカーが「最後の内容行」であれば完了とみなすが、返り値はそのまま返さず
+    最終行が素の marker になるよう正規化する。正規化できない(前後に他の
+    文字が混ざる等)場合は不合格にする。
+    """
     marker = f"[[DONE-{run_id}]]"
     if not text.strip():
         raise ValueError("assistant reply is empty")
     if text.count(marker) != 1:
         raise ValueError("DONE marker must appear exactly once on the final line")
-    # DOM 抽出は末尾に空行やコードフェンス(```)が付きやすい。マーカーが
-    # 「最後の内容行」であれば完了とみなす。末尾の空行・フェンス行は無視し、
-    # マーカー行自体は前後の空白とバッククォート(`)を剥がして一致判定する。
     lines = [ln.rstrip() for ln in text.splitlines()]
     while lines and (lines[-1] == "" or lines[-1].lstrip("`").strip() == ""):
         lines.pop()
@@ -413,7 +469,8 @@ def validate_reply(text, run_id):
     last = lines[-1].strip().strip("`").strip()
     if last != marker:
         raise ValueError(f"final line must be {marker}")
-    return text
+    lines[-1] = marker
+    return "\n".join(lines)
 
 
 def markdown_section(text, heading):
@@ -488,6 +545,7 @@ def fixture_connector_send(path, label):
         return fallback("login required")
     normalized = re.sub(r"\s+", " ", raw).lower()
     if label.lower() not in normalized:
+        save_diagnostic_artifacts_sync()
         return connector_unavailable(label, "connector label not found in fixture")
     if not re.search(r'id=["\']prompt-textarea["\']|textarea|contenteditable=["\']true["\']|composer-text-input|ProseMirror', raw, re.I):
         return fallback("composer not found")
@@ -721,6 +779,11 @@ def connector_search_prefix(label):
     return cleaned[:CONNECTOR_SEARCH_PREFIX_LEN]
 
 
+def connector_mention_query(label):
+    cleaned = re.sub(r"\s+", " ", str(label or "")).strip()
+    return re.sub(r"\s+tunnel\s+connector$", "", cleaned, flags=re.I)
+
+
 def connector_pill_verify_js(label):
     payload = json.dumps(label)
     return f"""
@@ -836,17 +899,130 @@ async def click_connector_search_result(page, label):
     }
 
 
-async def select_connector_via_menu_search(page, label, editor, timeout):
+async def focus_connector_menu_search(page):
+    script = f"""
+(() => {{
+  const visible = (el) => {{
+    const style = window.getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return style.display !== 'none' && style.visibility !== 'hidden' &&
+      rect.width > 0 && rect.height > 0;
+  }};
+  const composer = (el) =>
+    el.id === 'prompt-textarea' ||
+    el.getAttribute('name') === 'prompt-textarea' ||
+    Boolean(el.closest('form[data-type="unified-composer"]'));
+  const labelOf = (el) => String([
+    el.getAttribute('aria-label'),
+    el.getAttribute('placeholder'),
+    el.getAttribute('data-testid'),
+    el.getAttribute('role'),
+    el.textContent
+  ].filter(Boolean).join(' ')).replace(/\\s+/g, ' ').trim();
+  const inputs = [...document.querySelectorAll(
+    'input:not([type="file"]),textarea,[role="searchbox"],[role="textbox"],[contenteditable="true"]'
+  )].filter((el) => visible(el) && !composer(el));
+  if (inputs.length) {{
+    inputs[0].focus();
+    return {{ ok: true, target: labelOf(inputs[0]).slice(0, 160) || inputs[0].tagName }};
+  }}
+  const menuTarget = [
+    ...document.querySelectorAll(
+      '.popover [data-highlighted][tabindex="0"],.popover [tabindex="0"]'
+    )
+  ].find(visible);
+  if (menuTarget) {{
+    menuTarget.focus();
+    return {{
+      ok: true,
+      target: `keyboard-filter:${{labelOf(menuTarget).slice(0, 120)}}`
+    }};
+  }}
+  const controls = [...document.querySelectorAll(
+    '[role="menuitem"],[role="option"],[cmdk-item],button,[role="button"]'
+  )].filter(visible).filter((el) => !composer(el)).map(labelOf).filter(Boolean);
+  return {{
+    ok: false,
+    reason: 'connector menu search input not found',
+    controls: [...new Set(controls)].slice(-20).join(' || ')
+  }};
+}})()
+"""
+    result = await js(page, script)
+    return js_object(result) or {
+        "ok": False,
+        "reason": f"invalid menu search focus result ({type(result).__name__})",
+    }
+
+
+async def send_keys_to_active_page(page, text):
+    """Dispatch real key events without moving focus away from an open menu."""
+    from nodriver import cdp
+
+    for char in text:
+        await page.send(cdp.input_.dispatch_key_event("keyDown", key=char))
+        await page.send(cdp.input_.dispatch_key_event("char", text=char))
+        await page.send(cdp.input_.dispatch_key_event("keyUp", key=char))
+
+
+async def select_connector_via_mention(page, label, editor, timeout):
+    query = connector_mention_query(label)
+    if not query:
+        return False, "mention=empty connector label"
+    await clear_prompt(page)
+    try:
+        await editor.click()
+        await editor.send_keys(f"@{query}")
+    except Exception as exc:
+        return False, f"mention-keys={exc}"
+    deadline = time.time() + min(timeout, CONNECTOR_SEARCH_RESULT_TIMEOUT_S)
+    last_reason = "connector mention result not found"
+    while time.time() < deadline:
+        clicked = await click_connector_search_result(page, label)
+        if clicked.get("ok"):
+            await page.sleep(0.5)
+            selected_label = clicked.get("label") or query
+            verified = await verify_connector_pill(page, selected_label)
+            if verified.get("ok"):
+                return True, f"mention:@{query}->{selected_label}"
+            return False, (
+                "mention-pill-missing:"
+                f"pill={verified.get('hasPill')},label={verified.get('hasLabel')}"
+            )
+        last_reason = clicked.get("reason", last_reason)
+        await page.sleep(CONNECTOR_SEARCH_POLL_INTERVAL_S)
+    await clear_prompt(page)
+    return False, f"mention={last_reason}"
+
+
+async def select_connector_via_menu_search(page, label, timeout):
     prefix = connector_search_prefix(label)
     if not prefix:
         return False, "search=empty connector label"
     opened = await click_connector_menu_candidate(page)
     if not opened.get("ok"):
         return False, f"search-menu={opened.get('reason', 'not found')}"
-    await page.sleep(0.3)
+    await page.sleep(0.5)
+    clicked = await click_connector_search_result(page, label)
+    if clicked.get("ok"):
+        await page.sleep(0.5)
+        selected_label = clicked.get("label") or label
+        verified = await verify_connector_pill(page, selected_label)
+        if verified.get("ok"):
+            return True, f"menu:{selected_label}"
+        return False, (
+            "menu-pill-missing:"
+            f"pill={verified.get('hasPill')},label={verified.get('hasLabel')}"
+        )
+    focused = await focus_connector_menu_search(page)
+    if not focused.get("ok"):
+        controls = str(focused.get("controls") or "")
+        return False, (
+            f"focus={focused.get('reason', 'connector menu search input not found')};"
+            f"controls={controls[:1000]}"
+        )
     try:
-        await editor.click()
-        await editor.send_keys(prefix)
+        await send_keys_to_active_page(page, prefix)
     except Exception as exc:
         return False, f"search-keys={exc}"
     deadline = time.time() + min(timeout, CONNECTOR_SEARCH_RESULT_TIMEOUT_S)
@@ -855,16 +1031,23 @@ async def select_connector_via_menu_search(page, label, editor, timeout):
         clicked = await click_connector_search_result(page, label)
         if clicked.get("ok"):
             await page.sleep(0.5)
-            verified = await verify_connector_pill(page, label)
+            selected_label = clicked.get("label") or label
+            verified = await verify_connector_pill(page, selected_label)
             if verified.get("ok"):
-                return True, f"search:{prefix}->{clicked.get('label', label)}"
+                return True, f"search:{prefix}->{selected_label}"
             return False, (
                 "search-pill-missing:"
                 f"pill={verified.get('hasPill')},label={verified.get('hasLabel')}"
             )
         last_reason = clicked.get("reason", last_reason)
         await page.sleep(CONNECTOR_SEARCH_POLL_INTERVAL_S)
-    return False, f"search={last_reason}"
+    controls = str(focused.get("controls") or "")
+    focus_detail = (
+        f"focus={focused.get('target')}"
+        if focused.get("ok")
+        else f"focus={focused.get('reason')};controls={controls[:1000]}"
+    )
+    return False, f"search={last_reason};{focus_detail}"
 
 
 async def is_connector_selected(page, label):
@@ -888,13 +1071,12 @@ async def is_connector_selected(page, label):
   ].filter(Boolean).join(' '));
   const selected = (el) => {{
     const target = el.closest({json.dumps(SELECTED_STATE_CLOSEST)}) || el;
-    const state = [
-      target.getAttribute('aria-checked'),
-      target.getAttribute('aria-selected'),
-      target.getAttribute('aria-pressed'),
-      target.getAttribute('data-state')
-    ].join(' ').toLowerCase();
-    return /true|checked|selected|on/.test(state);
+    const ariaChecked = target.getAttribute('aria-checked');
+    const ariaSelected = target.getAttribute('aria-selected');
+    const ariaPressed = target.getAttribute('aria-pressed');
+    const dataState = (target.getAttribute('data-state') || '').toLowerCase();
+    return ariaChecked === 'true' || ariaSelected === 'true' || ariaPressed === 'true' ||
+      ['checked', 'selected', 'on', 'active'].includes(dataState);
   }};
   const elements = [...document.querySelectorAll({json.dumps(MENU_SCAN_CONNECTOR_SELECTED)})];
   for (const el of elements) {{
@@ -941,13 +1123,12 @@ async def click_connector_candidate(page, label):
   ].filter(Boolean).join(' '));
   const selected = (el) => {{
     const target = el.closest({json.dumps(SELECTED_STATE_CLOSEST)}) || el;
-    const state = [
-      target.getAttribute('aria-checked'),
-      target.getAttribute('aria-selected'),
-      target.getAttribute('aria-pressed'),
-      target.getAttribute('data-state')
-    ].join(' ').toLowerCase();
-    return /true|checked|selected|on/.test(state);
+    const ariaChecked = target.getAttribute('aria-checked');
+    const ariaSelected = target.getAttribute('aria-selected');
+    const ariaPressed = target.getAttribute('aria-pressed');
+    const dataState = (target.getAttribute('data-state') || '').toLowerCase();
+    return ariaChecked === 'true' || ariaSelected === 'true' || ariaPressed === 'true' ||
+      ['checked', 'selected', 'on', 'active'].includes(dataState);
   }};
   const score = (label) => {{
     const lower = label.toLowerCase();
@@ -992,6 +1173,42 @@ async def click_connector_candidate(page, label):
 
 
 async def click_connector_menu_candidate(page):
+    try:
+        buttons = await page.select_all('button[aria-haspopup="menu"]', timeout=0.5)
+        for element in buttons:
+            label = re.sub(r"\s+", " ", str(element.text or "")).strip()
+            if label == "プラグイン" or label.lower() in {"plugin", "plugins"}:
+                try:
+                    position = await element.get_position()
+                except Exception:
+                    position = None
+                if not position or position.width <= 0 or position.height <= 0:
+                    continue
+                await element.click_mouse()
+                return {
+                    "ok": True,
+                    "label": (
+                        f"nodriver:work-plugin:{label}"
+                        f"@{position.left:.0f},{position.top:.0f}"
+                    ),
+                    "selector": 'button[aria-haspopup="menu"]',
+                }
+    except Exception:
+        pass
+
+    for selector in CONNECTOR_MENU_SELECTORS:
+        try:
+            element = await page.select(selector, timeout=0.25)
+            if element:
+                await element.click_mouse()
+                return {
+                    "ok": True,
+                    "label": f"nodriver:{selector}",
+                    "selector": selector,
+                }
+        except Exception:
+            continue
+
     script = f"""
 (() => {{
   const norm = (s) => String(s || '').replace(/\\s+/g, ' ').trim();
@@ -1010,11 +1227,28 @@ async def click_connector_menu_candidate(page):
     el.getAttribute('title'),
     el.textContent
   ].filter(Boolean).join(' '));
+  const dispatchClickSequence = (target) => {{
+    if (!target || !(target instanceof EventTarget)) return false;
+    const types = ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'];
+    for (const type of types) {{
+      const common = {{ bubbles: true, cancelable: true, view: window }};
+      let event;
+      if (type.startsWith('pointer') && 'PointerEvent' in window) {{
+        event = new PointerEvent(type, {{
+          ...common, pointerId: 1, pointerType: 'mouse', isPrimary: true
+        }});
+      }} else {{
+        event = new MouseEvent(type, common);
+      }}
+      target.dispatchEvent(event);
+    }}
+    return true;
+  }};
   const selectors = {json.dumps(CONNECTOR_MENU_SELECTORS)};
   for (const selector of selectors) {{
     const el = document.querySelector(selector);
     if (el && visible(el) && !disabled(el)) {{
-      el.click();
+      dispatchClickSequence(el);
       return {{ ok: true, label: labelOf(el).slice(0, 160), selector }};
     }}
   }}
@@ -1023,7 +1257,7 @@ async def click_connector_menu_candidate(page):
   for (const el of buttons) {{
     const label = labelOf(el);
     if (label && labelPattern.test(label) && visible(el) && !disabled(el)) {{
-      el.click();
+      dispatchClickSequence(el);
       return {{ ok: true, label: label.slice(0, 160), selector: 'label' }};
     }}
   }}
@@ -1037,49 +1271,143 @@ async def click_connector_menu_candidate(page):
     }
 
 
+async def select_chat_surface(page):
+    state_script = """
+(() => {
+  const buttons = [...document.querySelectorAll('button[role="radio"]')];
+  const chat = buttons.find((el) =>
+    String(el.textContent || '').replace(/\\s+/g, ' ').trim() === 'Chat'
+  );
+  if (!chat) return { ok: false, reason: 'Chat surface not found' };
+  return {
+    ok: chat.getAttribute('aria-checked') === 'true' ||
+      chat.getAttribute('data-state') === 'on',
+    reason: 'Chat surface inactive'
+  };
+})()
+"""
+    state = js_object(await js(page, state_script)) or {}
+    if state.get("ok"):
+        return True, "already-active"
+    if state.get("reason") == "Chat surface not found":
+        return False, state["reason"]
+    try:
+        element = await page.find(
+            "Chat", best_match=True, return_enclosing_element=True, timeout=2
+        )
+        if not element:
+            return False, "Chat surface element not found"
+        await element.click_mouse()
+        await page.sleep(1)
+    except Exception as exc:
+        return False, f"Chat surface click failed: {exc}"
+    state = js_object(await js(page, state_script)) or {}
+    if state.get("ok"):
+        return True, "selected"
+    return False, state.get("reason", "Chat surface selection not verified")
+
+
 async def select_connector_mode(page, label, timeout):
     deadline = time.time() + timeout
     attempts = []
+
+    def record(stage, detail):
+        normalized = re.sub(r"\s+", " ", str(detail or "unknown")).strip()
+        entry = f"{stage}={normalized[:500]}"
+        attempts.append(entry)
+        sys.stderr.write(
+            "[pro-review-browser-drive] connector attempt "
+            f"{len(attempts)}: {entry}\n"
+        )
+
     pill = await verify_connector_pill(page, label)
     if pill.get("ok"):
+        record("pill", "found")
         return True, f"already-pill:{label}"
+    record("pill", pill.get("reason", "not found"))
     selected = await is_connector_selected(page, label)
     if selected.get("ok"):
-        return True, f"already-selected:{selected.get('label', label)}"
+        verified = await verify_connector_pill(page, selected.get("label", label))
+        if verified.get("ok"):
+            record("selected", selected.get("label", label))
+            return True, f"already-selected:{selected.get('label', label)}"
+        record(
+            "selected-pill-missing",
+            f"pill={verified.get('hasPill')},label={verified.get('hasLabel')}",
+        )
+    else:
+        record("selected", selected.get("reason", "not found"))
     _, editor = await wait_for_chat_input(page, min(timeout, 10))
     search_timeout = min(timeout, CONNECTOR_SEARCH_RESULT_TIMEOUT_S)
     if editor:
-        ok, detail = await select_connector_via_menu_search(
+        ok, detail = await select_connector_via_mention(
             page, label, editor, search_timeout
         )
         if ok:
+            record("mention", detail)
             return True, detail
-        attempts.append(detail)
+        record("mention", detail)
+        ok, detail = await select_connector_via_menu_search(
+            page, label, search_timeout
+        )
+        if ok:
+            record("search", detail)
+            return True, detail
+        record("search", detail)
     else:
-        attempts.append("search=composer not found")
+        record("search", "composer not found")
     first = await click_connector_candidate(page, label)
     if first.get("ok"):
         await page.sleep(0.5)
-        return True, f"visible:{first.get('label', label)}"
-    attempts.append(f"visible={first.get('reason', 'not found')}")
-    while time.time() < deadline:
+        verified = await verify_connector_pill(page, first.get("label", label))
+        if verified.get("ok"):
+            record("visible", first.get("label", label))
+            return True, f"visible:{first.get('label', label)}"
+        record(
+            "visible-pill-missing",
+            f"pill={verified.get('hasPill')},label={verified.get('hasLabel')}",
+        )
+    else:
+        record("visible", first.get("reason", "not found"))
+    menu_rounds = 0
+    while time.time() < deadline and menu_rounds < 3:
+        menu_rounds += 1
         opened = await click_connector_menu_candidate(page)
         if not opened.get("ok"):
-            attempts.append(f"menu={opened.get('reason', 'not found')}")
+            record("menu", opened.get("reason", "not found"))
             break
+        record("menu", opened.get("label", "opened"))
         await page.sleep(0.8)
         selected = await is_connector_selected(page, label)
         if selected.get("ok"):
-            return True, f"selected:{selected.get('label', label)}"
+            verified = await verify_connector_pill(page, selected.get("label", label))
+            if verified.get("ok"):
+                record("menu-selected", selected.get("label", label))
+                return True, f"selected:{selected.get('label', label)}"
+            record(
+                "menu-selected-pill-missing",
+                f"pill={verified.get('hasPill')},label={verified.get('hasLabel')}",
+            )
+        else:
+            record("menu-selected", selected.get("reason", "not found"))
         clicked = await click_connector_candidate(page, label)
         if clicked.get("ok"):
             await page.sleep(0.5)
-            return True, f"menu:{opened.get('label', '')}->{clicked.get('label', label)}"
-        attempts.append(
-            f"menu:{opened.get('label', '')}->{clicked.get('reason', 'connector item not found')}"
-        )
+            verified = await verify_connector_pill(page, clicked.get("label", label))
+            if verified.get("ok"):
+                record("menu-click", clicked.get("label", label))
+                return True, f"menu:{opened.get('label', '')}->{clicked.get('label', label)}"
+            record(
+                "menu-click-pill-missing",
+                f"pill={verified.get('hasPill')},label={verified.get('hasLabel')}",
+            )
+        else:
+            record(
+                "menu-click",
+                f"{opened.get('label', '')}->{clicked.get('reason', 'connector item not found')}",
+            )
         await page.sleep(0.5)
-    return False, " | ".join(attempts[-4:])
+    return False, " | ".join(attempts)
 
 
 async def select_deep_research_via_slash(page, timeout):
@@ -1134,6 +1462,116 @@ async def select_deep_research_mode(page, timeout):
         return True, detail
     attempts.append(f"tools={detail}")
     return False, " | ".join(attempts)
+
+
+# 2026-07 UI: モデル選択は「チップ → 詳細設定 → 思考レベル」の submenu。
+# 選択は draft 単位で新規セッションに引き継がれないため、送信前に毎回選ぶ。
+THINKING_LEVEL_CHOICES = ("off", "軽", "中程度", "高い", "非常に高い", "最大", "ウルトラ")
+
+MODEL_CHIP_RECT_JS = """
+(() => {
+  const els = [...document.querySelectorAll('button,[role="button"]')]
+    .filter((el) => /\\d\\.\\d/.test(el.textContent || '') && (el.textContent || '').trim().length < 40);
+  if (!els.length) return JSON.stringify({ ok: false, reason: 'model chip not found' });
+  els.sort((a, b) => (a.textContent || '').length - (b.textContent || '').length);
+  const r = els[0].getBoundingClientRect();
+  return JSON.stringify({ ok: true, x: r.x + r.width / 2, y: r.y + r.height / 2,
+    text: (els[0].textContent || '').replace(/\\s+/g, ' ').trim() });
+})()
+"""
+
+MENU_ACTIVE_ELEMENT_JS = """
+(() => {
+  const el = document.activeElement;
+  if (!el) return JSON.stringify({ text: '', role: '', expanded: '' });
+  return JSON.stringify({
+    text: (el.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 80),
+    role: el.getAttribute('role') || el.tagName.toLowerCase(),
+    expanded: el.getAttribute('aria-expanded') || '',
+  });
+})()
+"""
+
+_MENU_NAV_KEY_CODES = {"ArrowDown": 40, "ArrowRight": 39, "Enter": 13, "Escape": 27}
+
+
+async def press_menu_nav_key(page, key):
+    from nodriver import cdp
+
+    kwargs = {
+        "key": key,
+        "code": key,
+        "windows_virtual_key_code": _MENU_NAV_KEY_CODES[key],
+        "native_virtual_key_code": _MENU_NAV_KEY_CODES[key],
+    }
+    if key == "Enter":
+        kwargs["text"] = "\r"
+    await page.send(cdp.input_.dispatch_key_event(type_="rawKeyDown", **kwargs))
+    await page.send(cdp.input_.dispatch_key_event(type_="keyUp", **kwargs))
+
+
+async def _menu_active_element(page):
+    return js_object(await js(page, MENU_ACTIVE_ELEMENT_JS)) or {}
+
+
+async def _close_menu(page):
+    await press_menu_nav_key(page, "Escape")
+    await page.sleep(0.3)
+    await press_menu_nav_key(page, "Escape")
+
+
+async def select_thinking_level(page, level):
+    """チップは実クリック、以降は keyboard navigation で辿る。
+
+    popover は composer 再配置で座標がずれるため、行の座標クリックは使わない。
+    """
+    chip = js_object(await js(page, MODEL_CHIP_RECT_JS)) or {}
+    if not chip.get("ok"):
+        return False, chip.get("reason", "model chip not found")
+    await page.mouse_click(chip["x"], chip["y"])
+    await page.sleep(1.2)
+    reached = False
+    for _ in range(12):
+        await press_menu_nav_key(page, "ArrowDown")
+        await page.sleep(0.35)
+        active = await _menu_active_element(page)
+        text = active.get("text") or ""
+        if text == "詳細設定" and active.get("expanded") == "false":
+            await press_menu_nav_key(page, "Enter")
+            await page.sleep(0.7)
+            active = await _menu_active_element(page)
+            text = active.get("text") or ""
+        if text.startswith("思考レベル"):
+            reached = True
+            break
+    if not reached:
+        await _close_menu(page)
+        return False, "thinking-level row not reachable via keyboard"
+    await press_menu_nav_key(page, "ArrowRight")
+    await page.sleep(0.7)
+    picked = None
+    seen = []
+    for _ in range(10):
+        active = await _menu_active_element(page)
+        text = active.get("text") or ""
+        if text.startswith(level):
+            picked = text
+            break
+        if text in seen:
+            break
+        seen.append(text)
+        await press_menu_nav_key(page, "ArrowDown")
+        await page.sleep(0.35)
+    if picked is None:
+        await _close_menu(page)
+        return False, f"level '{level}' not in submenu: {seen}"
+    await press_menu_nav_key(page, "Enter")
+    await page.sleep(1.0)
+    chip_after = js_object(await js(page, MODEL_CHIP_RECT_JS)) or {}
+    chip_text = (chip_after.get("text") or "").replace(" ", "")
+    if level in chip_text:
+        return True, f"chip={chip_after.get('text')}"
+    return False, f"chip mismatch after selection: {chip_after.get('text')}"
 
 
 async def wait_for_chat_input(page, timeout):
@@ -1319,8 +1757,12 @@ SEND_CONFIRM_JS = f"""
   const norm = (s) => String(s || '').replace(/\\s+/g, ' ').trim().toLowerCase();
   const userTurns = document.querySelectorAll('[data-message-author-role="user"]').length;
   const stopBtn = [...document.querySelectorAll({json.dumps(BUTTON_ROLE_SELECTOR)})].some((el) => {{
-    const label = norm([el.getAttribute('aria-label'), el.getAttribute('data-testid'), el.textContent].filter(Boolean).join(' '));
-    return /stop generating|停止|生成を停止|stop streaming/.test(label);
+    const aria = norm(el.getAttribute('aria-label'));
+    const testid = norm(el.getAttribute('data-testid'));
+    const text = norm(el.textContent);
+    return /stop-button|stop-generation|stop-response/.test(testid)
+      || /^(stop generating|stop streaming|生成を停止|回答を停止|ストリーミングを停止|停止)$/.test(aria)
+      || /^(stop generating|stop streaming|生成を停止|回答を停止|ストリーミングを停止|停止)$/.test(text);
   }});
   return {{ userTurns, stopBtn }};
 }})()
@@ -1624,12 +2066,12 @@ IS_GENERATING_JS = f"""
   const norm = (s) => String(s || '').replace(/\\s+/g, ' ').trim().toLowerCase();
   const btns = [...document.querySelectorAll({json.dumps(BUTTON_ROLE_SELECTOR)})];
   const generating = btns.some((el) => {{
-    const label = norm([
-      el.getAttribute('aria-label'),
-      el.getAttribute('data-testid'),
-      el.textContent
-    ].filter(Boolean).join(' '));
-    return /stop generating|停止|生成を停止|stop streaming/.test(label);
+    const aria = norm(el.getAttribute('aria-label'));
+    const testid = norm(el.getAttribute('data-testid'));
+    const text = norm(el.textContent);
+    return /stop-button|stop-generation|stop-response/.test(testid)
+      || /^(stop generating|stop streaming|生成を停止|回答を停止|ストリーミングを停止|停止)$/.test(aria)
+      || /^(stop generating|stop streaming|生成を停止|回答を停止|ストリーミングを停止|停止)$/.test(text);
   }});
   let status = '';
   const turns = [...document.querySelectorAll('[data-message-author-role="assistant"]')];
@@ -1653,12 +2095,12 @@ BROWSER_STATE_JS = f"""
   const norm = (s) => String(s || '').replace(/\\s+/g, ' ').trim().toLowerCase();
   const btns = [...document.querySelectorAll({json.dumps(BUTTON_ROLE_SELECTOR)})];
   const generating = btns.some((el) => {{
-    const label = norm([
-      el.getAttribute('aria-label'),
-      el.getAttribute('data-testid'),
-      el.textContent
-    ].filter(Boolean).join(' '));
-    return /stop generating|停止|生成を停止|stop streaming/.test(label);
+    const aria = norm(el.getAttribute('aria-label'));
+    const testid = norm(el.getAttribute('data-testid'));
+    const text = norm(el.textContent);
+    return /stop-button|stop-generation|stop-response/.test(testid)
+      || /^(stop generating|stop streaming|生成を停止|回答を停止|ストリーミングを停止|停止)$/.test(aria)
+      || /^(stop generating|stop streaming|生成を停止|回答を停止|ストリーミングを停止|停止)$/.test(text);
   }});
   let status = '';
   const turns = [...document.querySelectorAll('[data-message-author-role="assistant"]')];
@@ -2031,24 +2473,8 @@ async def drive_live(args):
         _ARTIFACT_RUNTIME["page"] = page
         await page.sleep(2)
         if args.extract_only:
-            # recover 用: 送信せず、開いている会話の最終回答だけ取得する。
-            reply, reason, state = await extract_live_reply(
-                page, args.run_id, args.timeout, request_file=args.request_file
-            )
-            if reply is None:
-                reopen_url = resolve_reopen_conversation_url(args.run_id)
-                if reopen_url:
-                    reopen_url = validate_conversation_url(reopen_url)
-                    if reopen_url:
-                        sys.stderr.write(
-                            f"[pro-review-browser-drive] reopening conversation: {reopen_url}\n"
-                        )
-                        page = await browser.get(reopen_url)
-                        _ARTIFACT_RUNTIME["page"] = page
-                        await page.sleep(2)
-                        reply, reason, state = await extract_live_reply(
-                            page, args.run_id, args.timeout, request_file=args.request_file
-                        )
+            # recover 用: 保存済み会話 URL があれば先に開いてから抽出する（単一 deadline）。
+            reply, reason, state = await extract_only_flow(browser, page, args)
             if reply is None:
                 return await afallback(reason, state)
             print(reply)
@@ -2063,6 +2489,20 @@ async def drive_live(args):
                 return await afallback("login required", state)
             return await afallback("composer not found", state)
         if args.mode == "connector":
+            chat_selected, chat_detail = await select_chat_surface(page)
+            sys.stderr.write(
+                "[pro-review-browser-drive] Chat surface: "
+                f"{'selected' if chat_selected else 'not-selected'}; {chat_detail}\n"
+            )
+            if not chat_selected:
+                await save_diagnostic_artifacts_async()
+                return await afallback(
+                    f"Chat surface could not be selected: {chat_detail}"
+                )
+            selector, editor = await wait_for_chat_input(page, min(args.timeout, 30))
+            if not editor:
+                return await afallback("composer not found after Chat selection")
+            await clear_prompt(page)
             selected, detail = await select_connector_mode(
                 page, args.connector_label, min(args.timeout, 30)
             )
@@ -2071,6 +2511,7 @@ async def drive_live(args):
                     "[pro-review-browser-drive] connector selection failed: "
                     f"{args.connector_label}; {detail}\n"
                 )
+                await save_diagnostic_artifacts_async()
                 return connector_unavailable(args.connector_label, detail)
             sys.stderr.write(
                 "[pro-review-browser-drive] connector selected: "
@@ -2080,6 +2521,24 @@ async def drive_live(args):
             if not editor:
                 return await afallback("composer not found after connector selection")
         else:
+            if args.thinking_level != "off":
+                tl_ok, tl_detail = await select_thinking_level(page, args.thinking_level)
+                if not tl_ok:
+                    sys.stderr.write(
+                        "[pro-review-browser-drive] thinking level selection failed: "
+                        f"{args.thinking_level}; {tl_detail}\n"
+                    )
+                    await save_diagnostic_artifacts_async()
+                    return await afallback(
+                        f"thinking level unavailable: {tl_detail}"
+                    )
+                sys.stderr.write(
+                    "[pro-review-browser-drive] thinking level selected: "
+                    f"{args.thinking_level}; {tl_detail}\n"
+                )
+                selector, editor = await wait_for_chat_input(page, min(args.timeout, 30))
+                if not editor:
+                    return await afallback("composer not found after thinking level selection")
             policy = args.deep_research
             if policy == "auto":
                 policy = parse_deep_research_policy(request_text)
@@ -2222,6 +2681,9 @@ def main():
                     help="return after sending instead of waiting for a DOM reply")
     ap.add_argument("--deep-research", choices=TOOL_POLICY_CHOICES, default="auto",
                     help="select Deep Research in ChatGPT UI before sending: auto|on|off")
+    ap.add_argument("--thinking-level", choices=THINKING_LEVEL_CHOICES,
+                    default=os.environ.get("PRO_REVIEW_THINKING_LEVEL", "off"),
+                    help="送信前に ChatGPT UI の思考レベルを選択する (off で無効。旧 Pro 相当は ウルトラ)")
     ap.add_argument("--timeout", type=float, default=600.0)
     ap.add_argument("--extract-only", action="store_true",
                     help="送信せず、開いている会話の最終回答だけ取得する (recover 用)")
@@ -2232,6 +2694,13 @@ def main():
     ap.add_argument("--artifact-dir",
                     help="save diagnostic artifacts (dom-excerpt.html, screenshot.png) on fallback/timeout")
     args = ap.parse_args()
+
+    if not validate_run_id(args.run_id):
+        sys.stderr.write(
+            f"[pro-review-browser-drive] error: invalid run_id: {args.run_id!r}"
+            f" (must match {RUN_ID_RE.pattern}, not . or .., not start with '-' or '.')\n"
+        )
+        return 2
 
     configure_artifact_runtime(args)
 

@@ -18,11 +18,11 @@ OUT=$("$CMD" "$REPO" "$PROJECT" --mode review --question "find bugs")
 RC=$?
 assert_exit_ok "$RC" "T1 exit 0"
 
-SINCE=$(printf '%s\n' "$OUT" | awk '/^since:/{print $2; exit}')
-RUN_ID=$(printf '%s\n' "$OUT" | awk '/^run_id:/{print $2; exit}')
-REQ=$(printf '%s\n'   "$OUT" | awk '/^request_file:/{print $2; exit}')
-PNAME=$(printf '%s\n' "$OUT" | awk '/^project_name:/{print $2; exit}')
-MODE=$(printf '%s\n'  "$OUT" | awk '/^mode:/{print $2; exit}')
+SINCE=$(awk '/^since:/{print $2; exit}' <<<"$OUT")
+RUN_ID=$(awk '/^run_id:/{print $2; exit}' <<<"$OUT")
+REQ=$(awk '/^request_file:/{print $2; exit}' <<<"$OUT")
+PNAME=$(awk '/^project_name:/{print $2; exit}' <<<"$OUT")
+MODE=$(awk '/^mode:/{print $2; exit}' <<<"$OUT")
 
 assert_eq "$PROJECT" "$PNAME" "T1 project_name"
 assert_eq "review"   "$MODE"  "T1 mode review"
@@ -52,9 +52,9 @@ assert_contains "$OUT" "ChatGPT(non-5.5Pro + Tunnel connector)" "T1 output heade
 for M in research implement; do
   PROJ2="startreg-$$-$M"
   OUT2=$("$CMD" "$REPO" "$PROJ2" --mode "$M" --question "Q")
-  REQ2=$(printf '%s\n' "$OUT2" | awk '/^request_file:/{print $2; exit}')
-  SINCE2=$(printf '%s\n' "$OUT2" | awk '/^since:/{print $2; exit}')
-  RUN2=$(printf '%s\n' "$OUT2" | awk '/^run_id:/{print $2; exit}')
+  REQ2=$(awk '/^request_file:/{print $2; exit}' <<<"$OUT2")
+  SINCE2=$(awk '/^since:/{print $2; exit}' <<<"$OUT2")
+  RUN2=$(awk '/^run_id:/{print $2; exit}' <<<"$OUT2")
   CONT2=$(cat "$REQ2")
   assert_contains "$CONT2" "[[DONE-$RUN2]]" "T2 $M mode DONE marker"
   case "$M" in
