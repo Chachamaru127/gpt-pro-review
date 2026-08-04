@@ -187,7 +187,7 @@ elif [ "$DRIVE_RC" -ne 0 ]; then
 fi
 printf '%s\n' "$DRIVE_OUT"
 
-if [ -n "$FIXTURE_HTML" ]; then
+if [ -n "$FIXTURE_HTML" ] && [ "${PRO_REVIEW_FIXTURE_SKIP_REPLY:-}" != "1" ]; then
   printf 'fixture connector sent\n[[DONE-%s]]' "$RUN_ID" | "$SK/pro-review-save-reply" "$PROJECT_NAME" "$RUN_ID" >/dev/null
 fi
 
@@ -200,7 +200,8 @@ if W_OUT=$("$SK/pro-review-watch" "$INBOX" --run-id "$RUN_ID" --since "$((SINCE 
 else
   echo "STOP_REASON=save_report_timeout"
   echo "NEXT_ACTION=confirm ChatGPT called save_report(project, run_id, body)"
-  "$SK/pro-review-finish" "$PROJECT_NAME" >/dev/null 2>&1 || true
-  CLOSED=1
+  # finish を reply 未指定で呼ぶと inbox の旧 valid reply を再採用してしまう(f-15ea0d59d190)。
+  # timeout 時は露出を閉じるだけにする。
+  close_access
   exit 3
 fi

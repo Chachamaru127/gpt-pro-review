@@ -111,4 +111,26 @@ assert_contains "$OUT4" "report_bundle:" "T4 stale lock takeover completes run"
 [ ! -d "$LOCK_DIR4" ] || _fail "T4 lock dir should be released after run completes"
 cleanup_paths "$TMP_HOME4" "$REPO4"
 
+# ---- T5 (14.3): watch timeout 時に inbox の旧 valid reply を再採用しない ----
+TMP_HOME5=$(mktemp -d -t prr-home5-XXXXXX)
+REPO5=$(mkrepo)
+PROJECT5="connector-run-t5-$$"
+OUT5A=$(HOME="$TMP_HOME5" "$RUN" "$REPO5" "$PROJECT5" --question "find bugs" --fixture-html "$FIXTURE" --timeout 5 --drive-timeout 1)
+assert_exit_ok "$?" "T5 first round succeeds"
+OLD_RUN5="1000000000000-aaaaaa"
+printf 'old body\n[[DONE-%s]]' "$OLD_RUN5" > "$TMP_HOME5/.pro-review/inbox/$PROJECT5/REPLY-$OLD_RUN5.md"
+REPORTS5="$TMP_HOME5/.pro-review/reports/$PROJECT5"
+BEFORE5=$(find "$REPORTS5" -type f 2>/dev/null | wc -l | tr -d ' ')
+set +e
+OUT5B=$(HOME="$TMP_HOME5" PRO_REVIEW_FIXTURE_SKIP_REPLY=1 "$RUN" "$REPO5" "$PROJECT5" --question "find bugs" --fixture-html "$FIXTURE" --timeout 1 --drive-timeout 1 2>&1)
+RC5=$?
+set -e
+assert_eq "3" "$RC5" "T5 timeout round exits 3"
+assert_contains "$OUT5B" "STOP_REASON=save_report_timeout" "T5 stop reason on timeout"
+AFTER5=$(find "$REPORTS5" -type f 2>/dev/null | wc -l | tr -d ' ')
+assert_eq "$BEFORE5" "$AFTER5" "T5 stale reply not re-adopted (no new report files)"
+ACTIVE5=$(cat "$TMP_HOME5/.pro-review/active-project" 2>/dev/null || true)
+assert_eq "" "$ACTIVE5" "T5 active-project cleared on timeout"
+cleanup_paths "$TMP_HOME5" "$REPO5"
+
 echo "[test-connector-run] PASS"
