@@ -396,6 +396,28 @@ def load_persisted_conversation_url(run_id):
     return validate_conversation_url(raw)
 
 
+async def extract_only_flow(browser, page, args, deadline=None):
+    """Recover extraction: open the persisted conversation URL first, then extract.
+
+    URL 無しのときだけ現在ページで抽出する。deadline は全体で 1 つ共有し、
+    reopen 後の抽出が指定 timeout を超えないようにする。
+    """
+    if deadline is None:
+        deadline = time.time() + args.timeout
+    reopen_url = resolve_reopen_conversation_url(args.run_id)
+    if reopen_url:
+        sys.stderr.write(
+            f"[pro-review-browser-drive] reopening conversation: {reopen_url}\n"
+        )
+        page = await browser.get(reopen_url)
+        _ARTIFACT_RUNTIME["page"] = page
+        await page.sleep(2)
+    remaining = max(1.0, deadline - time.time())
+    return await extract_live_reply(
+        page, args.run_id, remaining, request_file=args.request_file
+    )
+
+
 def resolve_reopen_conversation_url(run_id):
     """Return validated staging URL for extract-only re-open, or None."""
     path = conversation_url_outbox_path(run_id)
@@ -2451,24 +2473,8 @@ async def drive_live(args):
         _ARTIFACT_RUNTIME["page"] = page
         await page.sleep(2)
         if args.extract_only:
-            # recover 用: 送信せず、開いている会話の最終回答だけ取得する。
-            reply, reason, state = await extract_live_reply(
-                page, args.run_id, args.timeout, request_file=args.request_file
-            )
-            if reply is None:
-                reopen_url = resolve_reopen_conversation_url(args.run_id)
-                if reopen_url:
-                    reopen_url = validate_conversation_url(reopen_url)
-                    if reopen_url:
-                        sys.stderr.write(
-                            f"[pro-review-browser-drive] reopening conversation: {reopen_url}\n"
-                        )
-                        page = await browser.get(reopen_url)
-                        _ARTIFACT_RUNTIME["page"] = page
-                        await page.sleep(2)
-                        reply, reason, state = await extract_live_reply(
-                            page, args.run_id, args.timeout, request_file=args.request_file
-                        )
+            # recover 用: 保存済み会話 URL があれば先に開いてから抽出する（単一 deadline）。
+            reply, reason, state = await extract_only_flow(browser, page, args)
             if reply is None:
                 return await afallback(reason, state)
             print(reply)

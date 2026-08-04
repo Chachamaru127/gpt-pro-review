@@ -599,4 +599,62 @@ HOME="$TMP_HOME20" "$VALIDATE" "$INBOX20" --run-id "$RID20" "$REPLY_PATH20" --qu
 assert_exit_ok "$?" "T20 validate-reply accepts browser-drive normalized+saved reply (fenced marker consistent end-to-end)"
 cleanup_paths "$TMP_HOME20"
 
+python3 - "$DRV" <<'PY'
+import asyncio
+import importlib.machinery
+import os
+import sys
+import tempfile
+
+mod = importlib.machinery.SourceFileLoader("pro_review_browser_drive_reopen", sys.argv[1]).load_module()
+
+os.environ["HOME"] = tempfile.mkdtemp(prefix="prr-reopen-")
+
+RID = "1700000000000-abc123"
+SAVED = "https://chatgpt.com/c/11111111-2222-3333-4444-555555555555"
+
+class FakePage:
+    def __init__(self, name):
+        self.name = name
+    async def sleep(self, _t):
+        pass
+
+class FakeBrowser:
+    def __init__(self):
+        self.gets = []
+    async def get(self, url):
+        self.gets.append(url)
+        return FakePage("reopened")
+
+calls = []
+async def fake_extract(page, run_id, timeout, request_file=None):
+    calls.append((page.name, timeout))
+    return ("body\n[[DONE-%s]]" % run_id, None, None)
+mod.extract_live_reply = fake_extract
+
+class Args:
+    run_id = RID
+    timeout = 30
+    request_file = None
+
+path = mod.conversation_url_outbox_path(RID)
+os.makedirs(os.path.dirname(path), exist_ok=True)
+with open(path, "w") as f:
+    f.write(SAVED + "\n")
+b = FakeBrowser()
+reply, reason, state = asyncio.run(mod.extract_only_flow(b, FakePage("original"), Args()))
+assert b.gets == [SAVED], b.gets
+assert len(calls) == 1 and calls[0][0] == "reopened", calls
+assert calls[0][1] <= 30, calls
+assert reply and reply.endswith("[[DONE-%s]]" % RID)
+
+os.remove(path)
+calls.clear()
+b2 = FakeBrowser()
+reply2, _r, _s = asyncio.run(mod.extract_only_flow(b2, FakePage("original"), Args()))
+assert b2.gets == [], b2.gets
+assert len(calls) == 1 and calls[0][0] == "original", calls
+PY
+assert_exit_ok "$?" "T21 extract-only reopens saved conversation URL first (single deadline)"
+
 echo "[test-browser-drive] PASS"

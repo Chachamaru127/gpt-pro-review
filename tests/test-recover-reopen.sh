@@ -64,13 +64,18 @@ src = open(path, encoding="utf-8").read()
 start = src.index("if args.extract_only:")
 end = src.index("selector, editor = await wait_for_chat_input", start)
 block = src[start:end]
-assert block.count("reopening conversation:") == 1
-assert block.count("await extract_live_reply(") == 2
-assert not re.search(r"\bwhile\b.*extract_live_reply", block, re.S)
-assert not re.search(r"\bfor\b.*extract_live_reply", block, re.S)
-assert "resolve_reopen_conversation_url" in block
-assert block.count("validate_conversation_url(reopen_url)") == 1
+assert "extract_only_flow(" in block
+assert "extract_live_reply(" not in block
+
+start2 = src.index("async def extract_only_flow(")
+end2 = src.index("def resolve_reopen_conversation_url", start2)
+flow = src[start2:end2]
+assert flow.count("reopening conversation:") == 1
+assert flow.count("await extract_live_reply(") == 1
+assert flow.index("browser.get(reopen_url)") < flow.index("await extract_live_reply(")
+assert "resolve_reopen_conversation_url" in flow
+assert not re.search(r"\b(while|for)\b", flow)
 PY
-assert_exit_ok "$?" "T2 extract-only re-open retries extract once (no loop)"
+assert_exit_ok "$?" "T2 extract-only reopens saved URL first, single extract (no retry loop)"
 
 echo "[test-recover-reopen] PASS"
