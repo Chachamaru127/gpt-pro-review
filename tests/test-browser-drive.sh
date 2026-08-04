@@ -567,4 +567,36 @@ PY
 assert_exit_ok "$?" "T19 conversation_url_outbox_path read/write reject traversal + symlink"
 cleanup_paths "$TMP_HOME19"
 
+# T20 (14.5): DONE marker 契約統一。正本は pro-review-validate-reply(最終行完全一致)。
+# browser-drive の validate_reply() はバッククォート/コードフェンス囲みマーカーを
+# 正規化して返し、返り値の最終行が素の marker になること。fenced fixture が
+# browser-drive -> save-reply -> validate-reply まで一貫して通ることも確認する。
+RID20="1700000000123-marker20"
+M20="[[DONE-$RID20]]"
+NORMALIZED=$(python3 - "$DRV" "$RID20" <<'PY'
+import importlib.machinery
+import sys
+mod = importlib.machinery.SourceFileLoader("pro_review_browser_drive_marker20", sys.argv[1]).load_module()
+run_id = sys.argv[2]
+marker = f"[[DONE-{run_id}]]"
+raw = f"結論: バグなし\n```\n{marker}\n```"
+sys.stdout.write(mod.validate_reply(raw, run_id))
+PY
+)
+assert_exit_ok "$?" "T20 validate_reply normalizes fenced marker"
+LAST_LINE=$(tail -n1 <<<"$NORMALIZED")
+assert_eq "$M20" "$LAST_LINE" "T20 normalized final line equals bare marker"
+
+TMP_HOME20=$(mktemp -d -t prr-browser-drive-marker20-XXXXXX)
+SAVE="$(repo_scripts_dir)/pro-review-save-reply"
+VALIDATE="$(repo_scripts_dir)/pro-review-validate-reply"
+PROJECT20="marker20"
+SAVED_OUT=$(printf '%s' "$NORMALIZED" | HOME="$TMP_HOME20" "$SAVE" "$PROJECT20" "$RID20")
+assert_exit_ok "$?" "T20 save-reply accepts normalized reply"
+REPLY_PATH20=$(awk '/^saved:/{print $2; exit}' <<<"$SAVED_OUT")
+INBOX20="$TMP_HOME20/.pro-review/inbox/$PROJECT20"
+HOME="$TMP_HOME20" "$VALIDATE" "$INBOX20" --run-id "$RID20" "$REPLY_PATH20" --quiet
+assert_exit_ok "$?" "T20 validate-reply accepts browser-drive normalized+saved reply (fenced marker consistent end-to-end)"
+cleanup_paths "$TMP_HOME20"
+
 echo "[test-browser-drive] PASS"

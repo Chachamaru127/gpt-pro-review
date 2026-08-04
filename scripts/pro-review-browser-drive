@@ -427,14 +427,18 @@ def connector_unavailable(label, detail=""):
 
 
 def validate_reply(text, run_id):
+    """正本は pro-review-validate-reply(最終行が marker と完全一致)。
+
+    DOM 抽出は末尾に空行やコードフェンス(```)・バッククォート囲みが付きやすい。
+    マーカーが「最後の内容行」であれば完了とみなすが、返り値はそのまま返さず
+    最終行が素の marker になるよう正規化する。正規化できない(前後に他の
+    文字が混ざる等)場合は不合格にする。
+    """
     marker = f"[[DONE-{run_id}]]"
     if not text.strip():
         raise ValueError("assistant reply is empty")
     if text.count(marker) != 1:
         raise ValueError("DONE marker must appear exactly once on the final line")
-    # DOM 抽出は末尾に空行やコードフェンス(```)が付きやすい。マーカーが
-    # 「最後の内容行」であれば完了とみなす。末尾の空行・フェンス行は無視し、
-    # マーカー行自体は前後の空白とバッククォート(`)を剥がして一致判定する。
     lines = [ln.rstrip() for ln in text.splitlines()]
     while lines and (lines[-1] == "" or lines[-1].lstrip("`").strip() == ""):
         lines.pop()
@@ -443,7 +447,8 @@ def validate_reply(text, run_id):
     last = lines[-1].strip().strip("`").strip()
     if last != marker:
         raise ValueError(f"final line must be {marker}")
-    return text
+    lines[-1] = marker
+    return "\n".join(lines)
 
 
 def markdown_section(text, heading):
