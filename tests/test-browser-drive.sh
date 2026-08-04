@@ -505,4 +505,66 @@ else
   _fail "T18 node required for selected() predicate validation"
 fi
 
+# T19 (14.4): --run-id 共通検証。path-safe [A-Za-z0-9._-]+、"."/".." 拒否、
+# 先頭 "-"/"." 拒否。CLI 経路(main 冒頭で即 exit 2)と、outbox パス生成
+# (conversation_url_outbox_path 経由の read/write 双方)の二層で拒否する。
+T19_I=0
+for BAD_RID in '../../etc/passwd' 'a/b' '.hidden' '-foo' '.' '..'; do
+  T19_I=$((T19_I + 1))
+  # マーカーを BAD_RID に合わせた fixture を都度作る。run_id 検証が抜けていると
+  # マーカーが一致して抽出成功(exit 0)してしまうため、これで真に検証ゲートを Red 化できる。
+  BAD_FIX="$TMP/badrid-$T19_I.html"
+  printf '<main><div data-message-author-role="assistant"><p>x</p><p>[[DONE-%s]]</p></div></main>\n' "$BAD_RID" > "$BAD_FIX"
+  set +e
+  # "-foo" は argparse 自体がオプション風とみなすため --run-id=BAD_RID 形式で値として渡す
+  OUT=$("$DRV" --fixture-html "$BAD_FIX" "--run-id=$BAD_RID" 2>&1)
+  RC=$?
+  set -e
+  assert_eq "2" "$RC" "T19 CLI rejects run_id '$BAD_RID'"
+  assert_contains "$OUT" "invalid run_id" "T19 CLI rejects run_id '$BAD_RID' with clear reason"
+done
+
+TMP_HOME19=$(mktemp -d -t prr-browser-drive-runid-XXXXXX)
+HOME="$TMP_HOME19" python3 - "$DRV" <<'PY'
+import importlib.machinery
+import os
+import sys
+
+mod = importlib.machinery.SourceFileLoader("pro_review_browser_drive_runid", sys.argv[1]).load_module()
+
+# write 経路: 不正 run_id は outbox パスを作らない(persist は None を返す)
+for bad in ("../../etc/passwd", "a/b", ".hidden", "-foo", ".", ".."):
+    assert mod.conversation_url_outbox_path(bad) is None, f"outbox path should reject {bad!r}"
+    assert mod.persist_conversation_url(bad, "https://chatgpt.com/c/x") is None, (
+        f"persist should reject run_id {bad!r}"
+    )
+
+# read 経路: 不正 run_id は既存ファイルの有無に関わらず None
+for bad in ("../../etc/passwd", "a/b", ".hidden", "-foo"):
+    assert mod.load_persisted_conversation_url(bad) is None, f"load should reject {bad!r}"
+    assert mod.resolve_reopen_conversation_url(bad) is None, f"resolve should reject {bad!r}"
+
+# 正常系は引き続き通る
+good = "1700000000123-runid19"
+assert mod.persist_conversation_url(good, "https://chatgpt.com/c/ok") == "https://chatgpt.com/c/ok"
+assert mod.load_persisted_conversation_url(good) == "https://chatgpt.com/c/ok"
+
+# 既存 symlink は read/write 双方拒否(先勝ちで置かれた symlink 経由の誤動作防止)
+sym_rid = "1700000000123-symlink19"
+outbox = os.path.expanduser("~/.pro-review/outbox")
+os.makedirs(outbox, exist_ok=True)
+target = os.path.join(outbox, "elsewhere.txt")
+with open(target, "w", encoding="utf-8") as f:
+    f.write("https://evil.example.com/c/x\n")
+sym_path = os.path.join(outbox, f"conversation-url-{sym_rid}")
+os.symlink(target, sym_path)
+assert mod.conversation_url_outbox_path(sym_rid) is None, "symlink outbox path must be rejected"
+assert mod.load_persisted_conversation_url(sym_rid) is None, "symlink read must be rejected"
+assert mod.persist_conversation_url(sym_rid, "https://chatgpt.com/c/y") is None, (
+    "symlink write must be rejected"
+)
+PY
+assert_exit_ok "$?" "T19 conversation_url_outbox_path read/write reject traversal + symlink"
+cleanup_paths "$TMP_HOME19"
+
 echo "[test-browser-drive] PASS"

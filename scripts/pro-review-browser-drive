@@ -292,6 +292,18 @@ async def afallback(reason, state=None):
     return _emit_fallback(reason, state)
 
 
+RUN_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def validate_run_id(run_id):
+    """path-safe [A-Za-z0-9._-]+、"."/".." 拒否、先頭 "-"/"." 拒否。"""
+    if not run_id or not RUN_ID_RE.match(run_id) or run_id in (".", ".."):
+        return False
+    if run_id.startswith(("-", ".")):
+        return False
+    return True
+
+
 def validate_conversation_url(url):
     """Return url when host is exactly chatgpt.com over https; else None."""
     if not url or not isinstance(url, str):
@@ -324,10 +336,22 @@ def is_conversation_url(url):
 
 
 def conversation_url_outbox_path(run_id):
-    return os.path.join(
-        os.path.expanduser("~/.pro-review/outbox"),
-        f"conversation-url-{run_id}",
-    )
+    """Build the outbox path for run_id's staged conversation URL.
+
+    run_id は path-safe な形式でなければならない。加えて、生成したパスの
+    realpath が outbox 直下であること・既存 symlink でないことを強制する
+    (呼び出し元が CLI --run-id 検証を経由しない場合の第二防御線)。
+    """
+    if not validate_run_id(run_id):
+        return None
+    outbox = os.path.expanduser("~/.pro-review/outbox")
+    path = os.path.join(outbox, f"conversation-url-{run_id}")
+    if os.path.islink(path):
+        return None
+    outbox_real = os.path.realpath(outbox)
+    if os.path.dirname(os.path.realpath(path)) != outbox_real:
+        return None
+    return path
 
 
 def persist_conversation_url(run_id, url):
@@ -341,6 +365,12 @@ def persist_conversation_url(run_id, url):
             )
         return None
     path = conversation_url_outbox_path(run_id)
+    if path is None:
+        sys.stderr.write(
+            "[pro-review-browser-drive] conversation url outbox path rejected"
+            f" for run_id: {run_id!r}\n"
+        )
+        return None
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         f.write(validated)
@@ -356,7 +386,7 @@ def persist_conversation_url(run_id, url):
 def load_persisted_conversation_url(run_id):
     """Load staged conversation URL and re-validate host before use."""
     path = conversation_url_outbox_path(run_id)
-    if not os.path.isfile(path):
+    if not path or not os.path.isfile(path):
         return None
     try:
         with open(path, encoding="utf-8") as f:
@@ -369,7 +399,7 @@ def load_persisted_conversation_url(run_id):
 def resolve_reopen_conversation_url(run_id):
     """Return validated staging URL for extract-only re-open, or None."""
     path = conversation_url_outbox_path(run_id)
-    if not os.path.isfile(path):
+    if not path or not os.path.isfile(path):
         return None
     try:
         with open(path, encoding="utf-8") as f:
@@ -2653,6 +2683,13 @@ def main():
     ap.add_argument("--artifact-dir",
                     help="save diagnostic artifacts (dom-excerpt.html, screenshot.png) on fallback/timeout")
     args = ap.parse_args()
+
+    if not validate_run_id(args.run_id):
+        sys.stderr.write(
+            f"[pro-review-browser-drive] error: invalid run_id: {args.run_id!r}"
+            f" (must match {RUN_ID_RE.pattern}, not . or .., not start with '-' or '.')\n"
+        )
+        return 2
 
     configure_artifact_runtime(args)
 
