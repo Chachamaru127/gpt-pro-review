@@ -14,12 +14,13 @@ import sys
 import tempfile
 
 FINDING_RE = re.compile(
-    r"^\[(?P<severity>高|中|低|high|medium|low)\]\s*"
-    r"(?P<file>[^:\s]+):(?P<line>\d+)(?:-\d+)?\s*[—:-]\s*(?P<title>.+)$",
+    r"^\[(?P<severity>重大|高|中|低|critical|high|medium|low)\]\s*"
+    r"(?P<file>[^:\s]+):(?P<line>\d+)(?:-\d+)?"
+    r"(?:\s*[,、]\s*\d+(?:-\d+)?)*(?:前後)?\s*[—:-]\s*(?P<title>.+)$",
     re.I,
 )
 JP_SEVERITY_RE = re.compile(
-    r"^(?:[-*]\s*)?重大度\s*[:：]\s*(?P<severity>高|中|低|high|medium|low)"
+    r"^(?:[-*]\s*)?重大度\s*[:：]\s*(?P<severity>重大|高|中|低|critical|high|medium|low)"
     r"\s*[—:-]\s*(?P<title>.+)$",
     re.I,
 )
@@ -28,7 +29,7 @@ INLINE_LOCATION_RE = re.compile(
     r"(?P<file>[^:\s。]+):(?P<line>\d+)(?:-\d+)?",
     re.I,
 )
-SEVERITY_ONLY_RE = re.compile(r"^\[(?P<severity>高|中|低|high|medium|low)\]$", re.I)
+SEVERITY_ONLY_RE = re.compile(r"^\[(?P<severity>重大|高|中|低|critical|high|medium|low)\]$", re.I)
 FILE_LINE_RE = re.compile(
     r"^(?P<file>[^:\s]+):(?P<line>\d+)(?:-\d+)?(?:\s*[—:-]\s*(?P<title>.*))?$"
 )
@@ -44,6 +45,8 @@ FOLLOWUP_VERDICT_RE = re.compile(
 
 def normalize_severity(severity):
     lowered = severity.lower()
+    if lowered in ("critical", "重大"):
+        return "高"
     if lowered == "high":
         return "高"
     if lowered == "medium":
@@ -136,7 +139,13 @@ def parse_reply(text):
                 title_parts.append(line)
             in_fence = True
             continue
-        m = FINDING_RE.match(line)
+        # 2026-07 の 5.5/5.6 は finding を「### [高] `file:1-2, 3-4` — 題」や
+        # 「1. **[重大] `file:1-2` — 題**」のような markdown 見出し / 番号リスト +
+        # bold + backtick で書くため、装飾を剥がして照合する。
+        finding_line = re.sub(r"^#{1,6}\s+", "", line)
+        finding_line = re.sub(r"^(?:\d+\.|[-*])\s+", "", finding_line)
+        finding_line = finding_line.replace("**", "").replace("`", "")
+        m = FINDING_RE.match(finding_line)
         if m:
             flush_title()
             flush_recommendation()
@@ -153,7 +162,7 @@ def parse_reply(text):
             pending_severity = None
             pending_file = None
             continue
-        jm = JP_SEVERITY_RE.match(line)
+        jm = JP_SEVERITY_RE.match(finding_line)
         if jm:
             loc = INLINE_LOCATION_RE.search(jm.group("title"))
             if loc:
@@ -174,7 +183,7 @@ def parse_reply(text):
                 pending_severity = None
                 pending_file = None
                 continue
-        sm = SEVERITY_ONLY_RE.match(line)
+        sm = SEVERITY_ONLY_RE.match(finding_line)
         if sm:
             flush_title()
             flush_recommendation()

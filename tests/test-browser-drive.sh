@@ -277,6 +277,10 @@ assert "download flood" in src
 assert "count_download_matches" in src
 assert "intercepted" in src
 assert "pbpaste fallback" in src
+# サイドバーの「レビュー依頼停止」のような会話名を生成停止ボタンと誤認しない。
+assert "/stop generating|停止|" not in src
+assert "stop-button|stop-generation|stop-response" in src
+assert "ストリーミングを停止|停止)$" in src
 extract = src[src.index("async def extract_via_copy") : src.index("async def extract_via_dom")]
 assert extract.index("SCROLL_CONVERSATION_BOTTOM_JS") < extract.index("COPY_LAST_REPLY_JS")
 assert "await page.sleep(0.4)" in extract
@@ -300,6 +304,7 @@ mod = importlib.machinery.SourceFileLoader(
 ).load_module()
 label = "pro-review Tunnel connector"
 assert mod.connector_search_prefix(label) == "pro-review T"
+assert mod.connector_mention_query(label) == "pro-review"
 assert mod.connector_search_prefix("  ") == ""
 
 pill_js = mod.connector_pill_verify_js(label)
@@ -316,11 +321,55 @@ fn_start = src.index("async def select_connector_mode")
 fn_end = src.index("async def select_deep_research_via_slash", fn_start)
 fn_body = src[fn_start:fn_end]
 assert "select_connector_via_menu_search" in fn_body
+assert "select_connector_via_mention" in fn_body
 assert "verify_connector_pill" in fn_body
 assert "click_connector_candidate" in fn_body
-assert fn_body.index("select_connector_via_menu_search") < fn_body.index("click_connector_candidate")
+assert fn_body.index("select_connector_via_mention") < fn_body.index(
+    "select_connector_via_menu_search"
+)
+assert fn_body.index("select_connector_via_menu_search") < fn_body.index(
+    "click_connector_candidate"
+)
+assert "connector attempt" in fn_body
+assert "attempts[-4:]" not in fn_body
+search_start = src.index("async def select_connector_via_menu_search")
+search_end = src.index("async def is_connector_selected", search_start)
+search_body = src[search_start:search_end]
+assert "send_keys_to_active_page" in search_body
+assert "focus_connector_menu_search" in search_body
+assert 'if not focused.get("ok"):' in search_body
+assert 'selected_label = clicked.get("label") or label' in search_body
+assert "verify_connector_pill(page, selected_label)" in search_body
+assert "editor.click()" not in search_body
+assert "editor.send_keys(prefix)" not in search_body
+menu_start = src.index("async def click_connector_menu_candidate")
+menu_end = src.index("async def select_connector_mode", menu_start)
+menu_body = src[menu_start:menu_end]
+assert "dispatchClickSequence" in menu_body
+assert "await page.select_all" in menu_body
+assert "nodriver:work-plugin:" in menu_body
+assert "await page.select" in menu_body
+assert "await element.click_mouse()" in menu_body
+assert "el.click()" not in menu_body
+assert "async def select_chat_surface" in src
+assert "Chat surface:" in src
+connector_mode_start = src.index('if args.mode == "connector"')
+connector_mode_end = src.index('else:', connector_mode_start)
+connector_mode_body = src[connector_mode_start:connector_mode_end]
+assert connector_mode_body.index("await select_chat_surface(page)") < connector_mode_body.index(
+    "await select_connector_mode("
+)
+assert connector_mode_body.index("await clear_prompt(page)") < connector_mode_body.index(
+    "await select_connector_mode("
+)
+assert "menu_rounds < 3" in fn_body
 assert "fill_prompt_preserve_pill" in src
 assert "SEND_KEYS_MAX_CHARS" in src
+connector_failure = src[
+    src.index('if not selected:', src.index('if args.mode == "connector"'))
+    : src.index('connector selected:', src.index('if args.mode == "connector"'))
+]
+assert "await save_diagnostic_artifacts_async()" in connector_failure
 PY
 assert_exit_ok "$?" "T15 connector search path source contract"
 

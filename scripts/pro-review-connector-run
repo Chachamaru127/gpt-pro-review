@@ -82,11 +82,11 @@ START_ARGS+=(--mode "$MODE")
 [ -n "$QUESTION" ] && START_ARGS+=(--question "$QUESTION")
 
 START_OUT=$("$SK/pro-review-start" "${START_ARGS[@]}")
-PROJECT_NAME=$(printf '%s\n' "$START_OUT" | awk '/^project_name:/{print $2; exit}')
-INBOX=$(printf '%s\n' "$START_OUT" | awk '/^inbox:/{print $2; exit}')
-SINCE=$(printf '%s\n' "$START_OUT" | awk '/^since:/{print $2; exit}')
-RUN_ID=$(printf '%s\n' "$START_OUT" | awk '/^run_id:/{print $2; exit}')
-REQ=$(printf '%s\n' "$START_OUT" | awk '/^request_file:/{print $2; exit}')
+PROJECT_NAME=$(awk '/^project_name:/{print $2; exit}' <<<"$START_OUT")
+INBOX=$(awk '/^inbox:/{print $2; exit}' <<<"$START_OUT")
+SINCE=$(awk '/^since:/{print $2; exit}' <<<"$START_OUT")
+RUN_ID=$(awk '/^run_id:/{print $2; exit}' <<<"$START_OUT")
+REQ=$(awk '/^request_file:/{print $2; exit}' <<<"$START_OUT")
 [ -n "$PROJECT_NAME" ] && [ -n "$INBOX" ] && [ -n "$SINCE" ] && [ -n "$RUN_ID" ] && [ -n "$REQ" ] \
   || { echo "[error] pro-review-start output missing machine-readable fields" >&2; exit 1; }
 
@@ -124,7 +124,8 @@ else
   echo "tunnel_fixture: skipped"
 fi
 
-DRIVE_ARGS=(--mode connector --send-only --run-id "$RUN_ID" --request-file "$REQ" --timeout "$DRIVE_TIMEOUT" --connector-label "$CONNECTOR_LABEL")
+ARTIFACT_DIR="$BASE/reports/$PROJECT_NAME/$RUN_ID"
+DRIVE_ARGS=(--mode connector --send-only --run-id "$RUN_ID" --request-file "$REQ" --timeout "$DRIVE_TIMEOUT" --connector-label "$CONNECTOR_LABEL" --artifact-dir "$ARTIFACT_DIR")
 [ -n "$FIXTURE_HTML" ] && DRIVE_ARGS+=(--fixture-html "$FIXTURE_HTML")
 
 set +e

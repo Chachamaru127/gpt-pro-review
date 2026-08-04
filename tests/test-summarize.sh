@@ -164,4 +164,44 @@ POSITIVE_SPLIT_OUT=$("$SUM" "$POSITIVE_SPLIT_EXAMPLE_REPLY")
 POSITIVE_SPLIT_TOTAL=$(printf '%s' "$POSITIVE_SPLIT_OUT" | python3 -c "import json,sys; print(json.load(sys.stdin)['total'])")
 assert_eq "0" "$POSITIVE_SPLIT_TOTAL" "T7 positive split example is not a finding"
 
+# 2026-07 実測: 5.6 は finding を markdown 見出し + backtick + 複数範囲で書く
+HEADING_REPLY="$TMP/heading-reply.md"
+cat > "$HEADING_REPLY" <<'EOF'
+## 2. 指摘一覧
+
+### [高] `scripts/pro-review-browser-drive:886-917, 974-982` — 検証対象の取り違え
+
+説明本文。
+
+**推奨修正：**
+
+* 完全一致を必須化する。
+
+### [中] `scripts/pro-review-browser-drive:1280前後` — フォールバックが検証を迂回
+
+[[DONE-1784706512278-4682c2]]
+EOF
+HEADING_OUT=$("$SUM" "$HEADING_REPLY")
+HEADING_TOTAL=$(printf '%s' "$HEADING_OUT" | python3 -c "import json,sys; print(json.load(sys.stdin)['total'])")
+assert_eq "2" "$HEADING_TOTAL" "T8 markdown heading findings parsed"
+HEADING_FILE=$(printf '%s' "$HEADING_OUT" | python3 -c "import json,sys; print(json.load(sys.stdin)['findings'][0]['file'])")
+assert_eq "scripts/pro-review-browser-drive" "$HEADING_FILE" "T8 backtick stripped from file"
+
+# 2026-07 実測: ウルトラ思考は番号リスト + bold + [重大] で書く
+NUMBERED_REPLY="$TMP/numbered-reply.md"
+cat > "$NUMBERED_REPLY" <<'EOF'
+## 指摘一覧
+
+1. **[重大] `scripts/pro-review-browser-drive:927-930, 952-955` — connector の同一性確認が自己参照です。**
+   説明本文。
+2. **[中] `scripts/pro-review-tunnel-check:51-61` — READY timeout が実効的ではありません。**
+
+[[DONE-1784707243369-c737b6]]
+EOF
+NUMBERED_OUT=$("$SUM" "$NUMBERED_REPLY")
+NUMBERED_TOTAL=$(printf '%s' "$NUMBERED_OUT" | python3 -c "import json,sys; print(json.load(sys.stdin)['total'])")
+assert_eq "2" "$NUMBERED_TOTAL" "T9 numbered bold findings parsed"
+NUMBERED_SEV=$(printf '%s' "$NUMBERED_OUT" | python3 -c "import json,sys; print(json.load(sys.stdin)['findings'][0]['severity'])")
+assert_eq "高" "$NUMBERED_SEV" "T9 重大 normalized to 高"
+
 echo "[test-summarize] PASS"

@@ -50,6 +50,8 @@ RC=$?
 set -e
 assert_eq "3" "$RC" "T2 connector missing exit 3"
 assert_contains "$OUT2" "STOP_REASON=connector_unavailable" "T2 connector unavailable stop"
+RUN_ID2=$(printf '%s\n' "$OUT2" | awk '/^run_id:/{print $2; exit}')
+assert_file_exists "$HOME/.pro-review/reports/$PROJECT2/$RUN_ID2/dom-excerpt.html" "T2 connector failure artifact"
 ACTIVE=$(cat "$HOME/.pro-review/active-project" 2>/dev/null || true)
 assert_eq "" "$ACTIVE" "T2 active-project cleared"
 

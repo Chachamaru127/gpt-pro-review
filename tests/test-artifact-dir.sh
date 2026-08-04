@@ -58,4 +58,24 @@ assert_eq "3" "$RC" "T2 fallback without artifact-dir"
 assert_file_not_exists "$NO_ART_DIR/dom-excerpt.html" "T2 no dom excerpt without flag"
 assert_not_contains "$OUT2" "ARTIFACTS:" "T2 no artifacts line without flag"
 
+NO_CONNECTOR="$TMP/no-connector.html"
+cat > "$NO_CONNECTOR" <<'EOF'
+<main>
+  <button id="composer-plus-btn" aria-label="Tools">+</button>
+  <div id="prompt-textarea" contenteditable="true"></div>
+</main>
+EOF
+CONNECTOR_ART_DIR="$TMP/reports/connector-project/$RID"
+set +e
+OUT3=$("$DRV" --fixture-html "$NO_CONNECTOR" --mode connector --send-only \
+  --request-file "$STOP" --run-id "$RID" --artifact-dir "$CONNECTOR_ART_DIR" \
+  --connector-label "pro-review Tunnel connector" 2>/dev/null)
+RC=$?
+set -e
+assert_eq "3" "$RC" "T3 connector unavailable exit"
+assert_contains "$OUT3" "STOP_REASON=connector_unavailable" "T3 connector stop reason"
+assert_contains "$OUT3" "ARTIFACTS:$CONNECTOR_ART_DIR" "T3 connector artifacts line"
+assert_file_exists "$CONNECTOR_ART_DIR/dom-excerpt.html" "T3 connector dom excerpt saved"
+assert_contains "$(cat "$CONNECTOR_ART_DIR/dom-excerpt.html")" "composer-plus-btn" "T3 connector dom excerpt content"
+
 echo "[test-artifact-dir] PASS"
