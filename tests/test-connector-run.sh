@@ -59,4 +59,56 @@ cleanup_paths "$REPO" \
   "$HOME/.pro-review/inbox/$PROJECT" "$HOME/.pro-review/reports/$PROJECT" "$HOME/.pro-review/workspace/$PROJECT" \
   "$HOME/.pro-review/inbox/$PROJECT2" "$HOME/.pro-review/reports/$PROJECT2" "$HOME/.pro-review/workspace/$PROJECT2"
 
+# T3 (14.2): Path B singleton lock。ほぼ同時に2プロセス起動すると、後発は
+# 既存 run を殺さず STOP_REASON=another_run_active で拒否される(実プロセス2本)。
+TMP_HOME3=$(mktemp -d -t prr-connector-run-lock-XXXXXX)
+REPO3=$(mkrepo)
+PROJECT3="connector-run-lock-$$"
+(
+  set +e
+  HOME="$TMP_HOME3" "$RUN" "$REPO3" "$PROJECT3" --question "find bugs" --fixture-html "$FIXTURE" --timeout 5 --drive-timeout 1 \
+    > "$TMP/lock-run1.out" 2> "$TMP/lock-run1.err"
+  echo "$?" > "$TMP/lock-run1.rc"
+) &
+PID1=$!
+set +e
+OUT3=$(HOME="$TMP_HOME3" "$RUN" "$REPO3" "$PROJECT3" --question "find bugs" --fixture-html "$FIXTURE" --timeout 5 --drive-timeout 1 2>&1)
+RC3=$?
+set -e
+wait "$PID1"
+RC1=$(cat "$TMP/lock-run1.rc")
+
+WINNERS=0
+[ "$RC1" = "0" ] && WINNERS=$((WINNERS + 1))
+[ "$RC3" = "0" ] && WINNERS=$((WINNERS + 1))
+assert_eq "1" "$WINNERS" "T3 exactly one parallel run succeeds (rc1=$RC1 rc3=$RC3)"
+
+REJECTS=0
+if [ "$RC1" = "3" ] && grep -q "STOP_REASON=another_run_active" "$TMP/lock-run1.out" "$TMP/lock-run1.err" 2>/dev/null; then
+  REJECTS=$((REJECTS + 1))
+fi
+if [ "$RC3" = "3" ] && grep -q "STOP_REASON=another_run_active" <<<"$OUT3"; then
+  REJECTS=$((REJECTS + 1))
+fi
+assert_eq "1" "$REJECTS" "T3 exactly one parallel run rejected with another_run_active"
+cleanup_paths "$TMP_HOME3" "$REPO3"
+
+# T4 (14.2): lock ディレクトリはあるが記録された PID が死んでいれば stale として奪取する。
+TMP_HOME4=$(mktemp -d -t prr-connector-run-stale-XXXXXX)
+REPO4=$(mkrepo)
+PROJECT4="connector-run-stale-$$"
+mkdir -p "$TMP_HOME4/.pro-review"
+LOCK_DIR4="$TMP_HOME4/.pro-review/.run-lock"
+mkdir -p "$LOCK_DIR4"
+( : ) &
+DEAD_PID=$!
+wait "$DEAD_PID" 2>/dev/null || true
+printf '%s\n' "$DEAD_PID" > "$LOCK_DIR4/pid"
+
+OUT4=$(HOME="$TMP_HOME4" "$RUN" "$REPO4" "$PROJECT4" --question "find bugs" --fixture-html "$FIXTURE" --timeout 5 --drive-timeout 1)
+assert_exit_ok "$?" "T4 stale lock (dead pid) is stolen, run succeeds"
+assert_contains "$OUT4" "report_bundle:" "T4 stale lock takeover completes run"
+[ ! -d "$LOCK_DIR4" ] || _fail "T4 lock dir should be released after run completes"
+cleanup_paths "$TMP_HOME4" "$REPO4"
+
 echo "[test-connector-run] PASS"

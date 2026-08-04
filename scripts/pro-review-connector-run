@@ -42,19 +42,65 @@ BASE="$HOME/.pro-review"
 mkdir -p "$BASE"
 chmod 700 "$BASE" 2>/dev/null || true
 
+# Path B は「そのプロジェクトだけ・使っている間だけ」露出する設計のため、
+# 同時に成立できる run は1つだけ。mkdir はファイルシステムレベルで atomic。
+LOCK_DIR="$BASE/.run-lock"
+LOCK_ACQUIRED=0
+DPID=""
+
+acquire_lock() {
+  local tries=0 holder_pid=""
+  while [ "$tries" -lt 2 ]; do
+    tries=$((tries + 1))
+    if mkdir "$LOCK_DIR" 2>/dev/null; then
+      printf '%s\n' "$$" > "$LOCK_DIR/pid"
+      LOCK_ACQUIRED=1
+      return 0
+    fi
+    holder_pid=$(cat "$LOCK_DIR/pid" 2>/dev/null || true)
+    if [ -n "$holder_pid" ] && kill -0 "$holder_pid" 2>/dev/null; then
+      return 1
+    fi
+    # lock はあるが記録された PID が死んでいる(または未記録) = stale。奪取して再試行。
+    rm -rf "$LOCK_DIR" 2>/dev/null || true
+  done
+  return 1
+}
+
+release_lock() {
+  if [ "$LOCK_ACQUIRED" = "1" ]; then
+    rm -rf "$LOCK_DIR" 2>/dev/null || true
+    LOCK_ACQUIRED=0
+  fi
+}
+
 CLOSED=0
 close_access() {
-  pkill -f 'tunnel-client run --profile pro-review' 2>/dev/null || true
+  # この run が起動した DPID(と直接の子プロセス)だけを止める。他の
+  # Path B run が起動した tunnel-client まで巻き込む pkill -f は使わない。
+  if [ -n "$DPID" ]; then
+    pkill -TERM -P "$DPID" 2>/dev/null || true
+    kill "$DPID" 2>/dev/null || true
+  fi
   : > "$BASE/active-project"
   CLOSED=1
   echo "[closed] アクセス遮断: デーモン停止 + active-project 解除" >&2
 }
 cleanup() {
-  if [ "$CLOSED" != "1" ]; then
+  # lock を取れていない(=このプロセスが露出を所有していない)場合、他の
+  # run の active-project/daemon に触れてはいけない。
+  if [ "$LOCK_ACQUIRED" = "1" ] && [ "$CLOSED" != "1" ]; then
     close_access
   fi
+  release_lock
 }
 trap cleanup EXIT INT TERM
+
+if ! acquire_lock; then
+  echo "STOP_REASON=another_run_active"
+  echo "NEXT_ACTION=wait for the current Path B run to finish, or inspect $LOCK_DIR/pid"
+  exit 3
+fi
 
 maybe_open_login() {
   local drive_output="$1"
