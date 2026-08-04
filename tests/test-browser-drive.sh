@@ -443,4 +443,66 @@ else
   _fail "T16 node required for connector JS syntax validation"
 fi
 
+# T18 (14.1): selected() は完全一致のみ true。"unchecked" が "checked" を部分文字列に
+# 含む・"not-selected" が "selected" を部分文字列に含むケースで誤検出しないこと。
+# 全成功経路で pill 再検証(verify_connector_pill)を必須化したことも構造で確認する。
+python3 - "$DRV" <<'PY'
+import sys
+src = open(sys.argv[1], encoding="utf-8").read()
+# 旧: 部分一致 regex が selected() 側に残っていないこと(2箇所とも)
+assert "/true|checked|selected|on/" not in src
+# 新: aria-* は === 'true' のみ、data-state は許可値との完全一致のみ
+assert src.count("=== 'true'") >= 6  # aria-checked/aria-selected/aria-pressed x 2箇所
+assert "['checked', 'selected', 'on', 'active'].includes" in src
+
+fn_start = src.index("async def select_connector_mode")
+fn_end = src.index("async def select_deep_research_via_slash", fn_start)
+fn_body = src[fn_start:fn_end]
+# 全成功経路(pill検出 / already-selected / visible / menu-selected / menu-click)で
+# pill 再検証が入っていること。pill検出自体を含め計5箇所以上 verify_connector_pill を参照。
+assert fn_body.count("verify_connector_pill") >= 5
+assert "already-selected" in fn_body
+assert "visible:" in fn_body
+PY
+assert_exit_ok "$?" "T18 selected() exact match + pill reverify source contract"
+
+if command -v node >/dev/null 2>&1; then
+  # selected() の状態判定ロジックを fixture 属性値に対して評価する。
+  # el.closest は自身を返すだけで足りる(traversal は別関心事、ここでは状態判定のみ検証)。
+  SELECTED_EVAL=$(node -e "
+const selected = (attrs) => {
+  const el = { getAttribute: (k) => (k in attrs ? attrs[k] : null) };
+  const target = el;
+  const ariaChecked = target.getAttribute('aria-checked');
+  const ariaSelected = target.getAttribute('aria-selected');
+  const ariaPressed = target.getAttribute('aria-pressed');
+  const dataState = (target.getAttribute('data-state') || '').toLowerCase();
+  return ariaChecked === 'true' || ariaSelected === 'true' || ariaPressed === 'true' ||
+    ['checked', 'selected', 'on', 'active'].includes(dataState);
+};
+const cases = [
+  [{ 'data-state': 'unchecked' }, false],
+  [{ 'data-state': 'not-selected' }, false],
+  [{ 'data-state': 'checked' }, true],
+  [{ 'data-state': 'selected' }, true],
+  [{ 'data-state': 'on' }, true],
+  [{ 'data-state': 'active' }, true],
+  [{ 'aria-checked': 'true' }, true],
+  [{ 'aria-checked': 'false' }, false],
+  [{ 'aria-pressed': 'true' }, true],
+  [{}, false],
+];
+for (const [attrs, want] of cases) {
+  const got = selected(attrs);
+  if (got !== want) {
+    console.error('mismatch: ' + JSON.stringify(attrs) + ' got=' + got + ' want=' + want);
+    process.exit(1);
+  }
+}
+" 2>&1) || SELECTED_EVAL_RC=$?
+  assert_exit_ok "${SELECTED_EVAL_RC:-0}" "T18 selected() predicate: unchecked/not-selected false, checked/selected/on/active true ($SELECTED_EVAL)"
+else
+  _fail "T18 node required for selected() predicate validation"
+fi
+
 echo "[test-browser-drive] PASS"

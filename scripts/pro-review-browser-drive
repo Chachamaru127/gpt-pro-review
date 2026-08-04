@@ -1014,13 +1014,12 @@ async def is_connector_selected(page, label):
   ].filter(Boolean).join(' '));
   const selected = (el) => {{
     const target = el.closest({json.dumps(SELECTED_STATE_CLOSEST)}) || el;
-    const state = [
-      target.getAttribute('aria-checked'),
-      target.getAttribute('aria-selected'),
-      target.getAttribute('aria-pressed'),
-      target.getAttribute('data-state')
-    ].join(' ').toLowerCase();
-    return /true|checked|selected|on/.test(state);
+    const ariaChecked = target.getAttribute('aria-checked');
+    const ariaSelected = target.getAttribute('aria-selected');
+    const ariaPressed = target.getAttribute('aria-pressed');
+    const dataState = (target.getAttribute('data-state') || '').toLowerCase();
+    return ariaChecked === 'true' || ariaSelected === 'true' || ariaPressed === 'true' ||
+      ['checked', 'selected', 'on', 'active'].includes(dataState);
   }};
   const elements = [...document.querySelectorAll({json.dumps(MENU_SCAN_CONNECTOR_SELECTED)})];
   for (const el of elements) {{
@@ -1067,13 +1066,12 @@ async def click_connector_candidate(page, label):
   ].filter(Boolean).join(' '));
   const selected = (el) => {{
     const target = el.closest({json.dumps(SELECTED_STATE_CLOSEST)}) || el;
-    const state = [
-      target.getAttribute('aria-checked'),
-      target.getAttribute('aria-selected'),
-      target.getAttribute('aria-pressed'),
-      target.getAttribute('data-state')
-    ].join(' ').toLowerCase();
-    return /true|checked|selected|on/.test(state);
+    const ariaChecked = target.getAttribute('aria-checked');
+    const ariaSelected = target.getAttribute('aria-selected');
+    const ariaPressed = target.getAttribute('aria-pressed');
+    const dataState = (target.getAttribute('data-state') || '').toLowerCase();
+    return ariaChecked === 'true' || ariaSelected === 'true' || ariaPressed === 'true' ||
+      ['checked', 'selected', 'on', 'active'].includes(dataState);
   }};
   const score = (label) => {{
     const lower = label.toLowerCase();
@@ -1272,9 +1270,16 @@ async def select_connector_mode(page, label, timeout):
     record("pill", pill.get("reason", "not found"))
     selected = await is_connector_selected(page, label)
     if selected.get("ok"):
-        record("selected", selected.get("label", label))
-        return True, f"already-selected:{selected.get('label', label)}"
-    record("selected", selected.get("reason", "not found"))
+        verified = await verify_connector_pill(page, selected.get("label", label))
+        if verified.get("ok"):
+            record("selected", selected.get("label", label))
+            return True, f"already-selected:{selected.get('label', label)}"
+        record(
+            "selected-pill-missing",
+            f"pill={verified.get('hasPill')},label={verified.get('hasLabel')}",
+        )
+    else:
+        record("selected", selected.get("reason", "not found"))
     _, editor = await wait_for_chat_input(page, min(timeout, 10))
     search_timeout = min(timeout, CONNECTOR_SEARCH_RESULT_TIMEOUT_S)
     if editor:
@@ -1296,10 +1301,17 @@ async def select_connector_mode(page, label, timeout):
         record("search", "composer not found")
     first = await click_connector_candidate(page, label)
     if first.get("ok"):
-        record("visible", first.get("label", label))
         await page.sleep(0.5)
-        return True, f"visible:{first.get('label', label)}"
-    record("visible", first.get("reason", "not found"))
+        verified = await verify_connector_pill(page, first.get("label", label))
+        if verified.get("ok"):
+            record("visible", first.get("label", label))
+            return True, f"visible:{first.get('label', label)}"
+        record(
+            "visible-pill-missing",
+            f"pill={verified.get('hasPill')},label={verified.get('hasLabel')}",
+        )
+    else:
+        record("visible", first.get("reason", "not found"))
     menu_rounds = 0
     while time.time() < deadline and menu_rounds < 3:
         menu_rounds += 1
@@ -1311,18 +1323,32 @@ async def select_connector_mode(page, label, timeout):
         await page.sleep(0.8)
         selected = await is_connector_selected(page, label)
         if selected.get("ok"):
-            record("menu-selected", selected.get("label", label))
-            return True, f"selected:{selected.get('label', label)}"
-        record("menu-selected", selected.get("reason", "not found"))
+            verified = await verify_connector_pill(page, selected.get("label", label))
+            if verified.get("ok"):
+                record("menu-selected", selected.get("label", label))
+                return True, f"selected:{selected.get('label', label)}"
+            record(
+                "menu-selected-pill-missing",
+                f"pill={verified.get('hasPill')},label={verified.get('hasLabel')}",
+            )
+        else:
+            record("menu-selected", selected.get("reason", "not found"))
         clicked = await click_connector_candidate(page, label)
         if clicked.get("ok"):
-            record("menu-click", clicked.get("label", label))
             await page.sleep(0.5)
-            return True, f"menu:{opened.get('label', '')}->{clicked.get('label', label)}"
-        record(
-            "menu-click",
-            f"{opened.get('label', '')}->{clicked.get('reason', 'connector item not found')}",
-        )
+            verified = await verify_connector_pill(page, clicked.get("label", label))
+            if verified.get("ok"):
+                record("menu-click", clicked.get("label", label))
+                return True, f"menu:{opened.get('label', '')}->{clicked.get('label', label)}"
+            record(
+                "menu-click-pill-missing",
+                f"pill={verified.get('hasPill')},label={verified.get('hasLabel')}",
+            )
+        else:
+            record(
+                "menu-click",
+                f"{opened.get('label', '')}->{clicked.get('reason', 'connector item not found')}",
+            )
         await page.sleep(0.5)
     return False, " | ".join(attempts)
 
